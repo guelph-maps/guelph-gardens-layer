@@ -24,7 +24,7 @@ garden footprints had no OSM garden within 25 m, and OSM's side was already
 being closed by hand &mdash; eight community gardens added or retagged between
 2026-06-25 and 09-30. A page is the tool for that.
 
-## First run (2026-10-09, OSM base 2026-10-10 00:03Z)
+## First run (2026-10-09, OSM base 2026-10-10 00:10Z)
 
 | | |
 |---|--:|
