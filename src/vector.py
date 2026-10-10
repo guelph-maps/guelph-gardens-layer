@@ -12,7 +12,7 @@ from src import config
 
 # tile-join writes thousands of small files; doing that on the WSL filesystem
 # and copying the tree out afterwards is far faster than writing onto /mnt/c.
-WSL_PBF_DIR = "/tmp/guelph-parks-vector-tiles"
+WSL_PBF_DIR = "/tmp/guelph-gardens-vector-tiles"
 
 
 def build_vector(slim_path=None):
@@ -20,7 +20,7 @@ def build_vector(slim_path=None):
 
     Returns the number of .pbf files produced.
     """
-    slim_path = slim_path or config.LAYER_SLIM_PATH
+    slim_path = slim_path or config.SLIM_PATH
     if not os.path.isfile(slim_path):
         raise RuntimeError(f"Slim GeoJSONL not found: {slim_path}. Run 'slim' first.")
     os.makedirs(config.BUILD_DIR, exist_ok=True)
@@ -32,7 +32,11 @@ def build_vector(slim_path=None):
         f"tippecanoe -o '{mbtiles_wsl}' "
         f"-Z{config.VECTOR_MINZOOM} -z{config.VECTOR_MAXZOOM} "
         f"--no-tile-size-limit --no-feature-limit "
-        f"-l {config.VECTOR_LAYER_NAME} -n 'Guelph Parks (Park Boundary)' "
+        # Seventy small features: keep every one at every zoom. The default
+        # drop rate thins points below the max zoom, and tiny-polygon reduction
+        # would turn a 230 m2 bed into a placeholder square at z12.
+        f"-r1 --no-tiny-polygon-reduction "
+        f"-l {config.VECTOR_LAYER_NAME} -n 'Guelph Community Gardens' "
         f"-A '{config.ATTRIBUTION}' --force '{slim_wsl}'"
     )
     print("Running tippecanoe ...")

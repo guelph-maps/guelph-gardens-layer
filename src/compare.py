@@ -1,23 +1,36 @@
-"""Compare the City Park Boundary polygons against OSM park areas.
+"""Compare the City's community gardens roster against gardens in OSM.
 
-Pulls park-like areas from OpenStreetMap (Overpass) within Guelph, then for
-each kept City polygon checks whether an OSM area overlaps it. The result is
-written to data/gaps.geojson:
+Pulls garden-like features from OpenStreetMap (Overpass) within Guelph, then
+pairs each in-use roster garden with at most one OSM garden lying within
+config.MATCH_RADIUS_M of it -- of its footprint's edge, or of its roster point
+when the City has drawn no footprint. Pairing is ONE-TO-ONE: Parkwood
+Community Garden and West Village Co-op Youth Farm sit side by side at 170
+Stephanie Drive and both lie within reach of the same OSM way, and one OSM
+garden cannot stand for two of the City's. Pairs are taken best first: a name
+that agrees, then an OSM garden tagged as a community garden, then distance.
 
-  * "missing"     -- no OSM park area overlaps the City polygon (add it to OSM);
-  * "mismatch"    -- one overlaps, but its (present) OSM name differs;
-  * "unnamed"     -- one overlaps but the OSM area has no name (add one);
-  * "placeholder" -- a park the City has not named ("Unnamed Neighbourhood
-                     Park") that is any of the above; that string is not a name,
-                     so it gets its own category instead of being offered as one.
+Each food-growing garden gets one status, written to data/gaps.geojson:
 
-Overlap is tested with pure-Python centroid-in-polygon checks (both
-directions) after a bounding-box prefilter -- enough for a review tool, no GIS
-dependency. A flaky Overpass falls back to the cached response, but only after
-every mirror has been tried several times -- see _load_osm.
+  * "missing"       -- no OSM garden near its footprint (add it to OSM);
+  * "point_only"    -- no OSM garden near its roster point, and the City has
+                       drawn no footprint either: find it on the ground;
+  * "untyped"       -- matched to a leisure=garden that is not tagged
+                       garden:type=community (nor allotments or orchard);
+                       checked before the name, since it is the weakest match;
+  * "unnamed"       -- matched, but the OSM garden has no name;
+  * "name_mismatch" -- matched, but the OSM name is a different name.
+
+A matched garden with none of those problems is not a gap and is not written.
+Pollinator patches are paired afterwards, against the OSM gardens left over,
+and written with status "pollinator" whatever the outcome: OSM has no settled
+tag for a pollinator patch, so they are shown and never counted.
+
+Geometry is pure Python in a local metric projection -- at ~70 gardens against
+~75 OSM features nothing heavier earns its install.
 """
 
 import json
+import math
 import os
 import re
 import time
@@ -28,28 +41,40 @@ import requests
 from addressvault import net
 
 from src import config, history
-from src.slim import is_placeholder
+
+GAP_STATUSES = ("missing", "point_only", "unnamed", "name_mismatch", "untyped")
+
+# Local equirectangular projection, metres. Guelph spans 0.14 degrees of
+# latitude; the scale error across it is far below a garden bed.
+_LAT0 = 43.53
+_KX = 111320 * math.cos(math.radians(_LAT0))
+_KY = 110574
 
 
 def compare():
     """Build data/gaps.geojson + summary from City vs OSM. Returns the summary."""
     data, osm_date, from_cache = _load_osm()
-    rings = _osm_rings(data)
-    print(f"OSM park-area rings: {len(rings):,}")
+    osm = _osm_gardens(data)
+    print(f"OSM gardens:  {len(osm):,}")
     city = list(_city_features())
-    print(f"City polygons:       {len(city):,}")
+    food = sum(1 for c in city if c["kind"] == "food")
+    print(f"City gardens: {len(city):,} ({food:,} food, "
+          f"{len(city) - food:,} pollinator)")
 
-    gaps, counts = _match(city, rings)
+    gaps, counts = _match(city, osm)
     _write_gaps(gaps)
 
-    summary = {"osm_rings": len(rings), "city": len(city),
-               "osm_date": osm_date, "osm_stale": from_cache, **counts}
+    summary = {"osm": len(osm), "city": food, "osm_date": osm_date,
+               "osm_stale": from_cache, **counts}
     with open(config.GAPS_COUNT_PATH, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
     print(
-        f"Gaps: {counts['missing']:,} missing, {counts['mismatch']:,} mismatch, "
-        f"{counts['unnamed']:,} unnamed OSM, "
-        f"{counts['placeholder']:,} placeholder-named"
+        f"Gaps: {counts['missing']:,} missing, {counts['point_only']:,} "
+        f"point-only, {counts['unnamed']:,} unnamed, "
+        f"{counts['name_mismatch']:,} name mismatch, {counts['untyped']:,} "
+        f"untyped; {counts['matched']:,} matched cleanly; "
+        f"{counts['pollinator']:,} pollinator ({counts['pollinator_osm']:,} "
+        f"with an OSM garden near)"
     )
     if from_cache:
         print(f"NOTE: compared against cached OSM data from {osm_date}, "
@@ -61,17 +86,15 @@ def compare():
 # --- OSM source -------------------------------------------------------------
 
 def _overpass_query(at=None):
-    """The Overpass QL for park-like areas; ``at`` (ISO instant) asks for OSM
-    as it stood then -- an attic query, used by the history backfill."""
+    """The Overpass QL for garden-like features; ``at`` (ISO instant) asks for
+    OSM as it stood then -- an attic query, used by the history backfill."""
     s, w, n, e = config.GUELPH_BBOX
     bbox = f"{s},{w},{n},{e}"
     parts = []
-    for key, values in config.OSM_AREA_TAGS.items():
+    for key, values in config.OSM_GARDEN_TAGS.items():
         rx = "|".join(values)
-        parts.append(f'  way["{key}"~"^({rx})$"]({bbox});')
-        parts.append(f'  relation["{key}"~"^({rx})$"]({bbox});')
-    # "out geom" (body verbosity) so RELATIONS carry their members + geometry;
-    # "out tags geom" would strip member lists and silently drop every relation.
+        parts.append(f'  nwr["{key}"~"^({rx})$"]({bbox});')
+    # "out geom" (body verbosity) so RELATIONS carry their members + geometry.
     settings = "[out:json][timeout:180]"
     if at:
         settings += f'[date:"{at}"]'
@@ -83,20 +106,16 @@ class OsmUnavailable(Exception):
 
 
 def _load_osm():
-    """Return (data, fetch_date, from_cache) for OSM park areas.
+    """Return (data, osm_date, from_cache) for OSM gardens.
 
     Every mirror is tried, and the whole list is retried: the thing being worked
     around is a loaded instance shedding one request, which clears in seconds.
-    Before this, one POST was the entire effort, and two 504s a week apart left
-    the gap page comparing against a fortnight-old OSM without failing anything.
-
-    Falling back to the cache still beats no gap page, but it is reported rather
-    than shrugged off -- ``from_cache`` reaches the published page, and an online
-    machine that could not reach any mirror raises so the run can exit non-zero
-    and be retried by the scheduler.
+    Falling back to the cache still beats no gap page, but it is reported --
+    ``from_cache`` reaches the published page, and the run exits non-zero so the
+    scheduler retries it.
     """
     query = _overpass_query()
-    print("Querying Overpass for OSM park areas ...")
+    print("Querying Overpass for OSM gardens ...")
     for attempt in range(config.OVERPASS_ROUNDS):
         if attempt:
             print(f"  no mirror answered; retrying the list in "
@@ -113,9 +132,8 @@ def _load_osm():
             _save_fetch(date.today().isoformat(), url, osm_base, data)
             return data, osm_base, False
 
-    # Nothing answered. Ask why before deciding what it means: no link is not a
-    # failed build -- the run may as well not have happened -- while a healthy
-    # link and no mirror is a real outage worth retrying.
+    # Nothing answered. No link is not a failed build; a healthy link and no
+    # mirror is a real outage worth retrying.
     cached = _load_cache()
     try:
         net.wait_for_link(wait=False)
@@ -150,22 +168,26 @@ def _try_overpass(url, query):
         resp.raise_for_status()
         data = resp.json()
     except (requests.RequestException, ValueError) as e:
+        # Overpass sends a runtime error as an HTML page, which lands here as a
+        # ValueError -- the first live query of this project got exactly that.
         print(f"  {host}: {type(e).__name__}: {str(e).splitlines()[0][:120]}")
         return None
 
     count = len(data.get("elements", []))
     if count < config.OSM_MIN_ELEMENTS:
-        # HTTP 200 is not proof of an answer. A regional instance replies to a
-        # Toronto bbox with a valid, empty element list, and taking that at face
-        # value would report every City park as missing from OSM.
+        # HTTP 200 is not proof of an answer. A regional instance replies to an
+        # out-of-region bbox with a valid, empty element list.
         print(f"  {host}: {count:,} elements, under the "
               f"{config.OSM_MIN_ELEMENTS:,} floor -- ignoring this reply")
         return None
     base = _osm_base_time(data)
-    if base and datetime.now(timezone.utc) - base > timedelta(days=config.OSM_MAX_AGE_DAYS):
-        # Nor is a full reply proof of a current one. A lagging mirror answers
-        # the query in full from data months old, and the page would present
-        # that as this week's OSM.
+    if base is None:
+        # A reply that does not say how current it is cannot be dated, and the
+        # page would otherwise print today beside it.
+        print(f"  {host}: no timestamp_osm_base in the reply -- ignoring it")
+        return None
+    if datetime.now(timezone.utc) - base > timedelta(days=config.OSM_MAX_AGE_DAYS):
+        # A lagging mirror answers the query in full from data months old.
         print(f"  {host}: OSM data from {_osm_base(data)}, older than "
               f"{config.OSM_MAX_AGE_DAYS} days -- ignoring this reply")
         return None
@@ -175,7 +197,7 @@ def _try_overpass(url, query):
 
 
 def _load_cache():
-    """(data, fetch_date) for the cached Overpass reply, or None."""
+    """(data, osm_date) for the cached Overpass reply, or None."""
     if not os.path.isfile(config.OSM_CACHE_PATH):
         return None
     with open(config.OSM_CACHE_PATH, encoding="utf-8") as f:
@@ -184,16 +206,8 @@ def _load_cache():
 
 
 def _osm_base(data):
-    """How current the OSM half of the diff actually is.
-
-    Overpass states this about its own reply, as ``osm3s.timestamp_osm_base``:
-    the moment of the last minutely diff the answering mirror had applied. That
-    is the honest date for the page, and it is not the same as "today" -- a
-    mirror can answer instantly with data from last week, which is precisely the
-    failure this project has been bitten by. Trimmed to the minute for display;
-    the raw value goes in the sidecar. Falls back to today's date if a mirror
-    omits the block.
-    """
+    """The OSM database timestamp the mirror declares about its own reply,
+    trimmed to the minute -- the honest date for the page, not "today"."""
     stamp = ((data.get("osm3s") or {}).get("timestamp_osm_base") or "").strip()
     if len(stamp) >= 16:
         return f"{stamp[:10]} {stamp[11:16]}Z"
@@ -232,27 +246,58 @@ def _save_fetch(fetched, url, osm_base, data):
         }, f, indent=2)
 
 
-def _osm_rings(data):
-    """Flatten OSM ways and relation outer members into matchable rings."""
-    rings = []
+def _osm_gardens(data):
+    """OSM garden features as matchable shapes (open ways are dropped)."""
+    out = []
     for el in data.get("elements", []):
-        name = (el.get("tags") or {}).get("name")
-        if el.get("type") == "way":
-            rings.append(_make_ring(el.get("geometry"), name, "way", el["id"]))
+        tags = el.get("tags") or {}
+        if el.get("type") == "node":
+            if "lon" not in el:
+                continue
+            parts = [[_proj(el["lon"], el["lat"])]]
+        elif el.get("type") == "way":
+            ring = _ring(el.get("geometry"))
+            if not ring:
+                continue  # an open way (a hedge line, a garden path) is no area
+            parts = [ring]
         elif el.get("type") == "relation":
-            for loop in _relation_outer_loops(el):
-                rings.append(_make_ring(loop, name, "relation", el["id"]))
-    return [r for r in rings if r]
+            parts = [r for r in (_ring(loop) for loop in _relation_outer_loops(el)) if r]
+            if not parts:
+                continue
+        else:
+            continue
+        out.append({
+            "otype": el["type"], "oid": el["id"], "tags": tags,
+            "name": tags.get("name"), "typed": _typed(tags),
+            "parts": parts, "bbox": _bbox(parts),
+        })
+    return out
+
+
+def _typed(tags):
+    """Tagged as the kind of garden the roster lists, not a generic garden."""
+    return (tags.get("garden:type") == "community"
+            or tags.get("landuse") in ("allotments", "orchard"))
+
+
+def _tag_label(tags):
+    """The one tag a reviewer needs to see: what the OSM feature says it is."""
+    if tags.get("leisure") == "garden":
+        gt = tags.get("garden:type")
+        return f"leisure=garden + garden:type={gt}" if gt else "leisure=garden"
+    return f"landuse={tags.get('landuse')}"
+
+
+def _ring(geom):
+    """A closed way's geometry as a projected ring, or None if it is open."""
+    pts = [_proj(p["lon"], p["lat"]) for p in geom or () if "lon" in p]
+    if len(pts) < 4 or pts[0] != pts[-1]:
+        return None
+    return pts
 
 
 def _relation_outer_loops(rel):
-    """Stitch a multipolygon relation's outer member ways into closed loops.
-
-    OSM splits a long outer boundary across several ways; only joined
-    end-to-end do they form the ring(s). Without this, each open segment looks
-    like a degenerate sliver. Returns a list of point lists (geometry dicts),
-    one per assembled loop.
-    """
+    """Stitch a multipolygon relation's outer member ways into closed loops."""
     segs = [m["geometry"] for m in rel.get("members", [])
             if m.get("type") == "way" and m.get("role") in ("outer", "")
             and m.get("geometry")]
@@ -288,116 +333,139 @@ def _pt(p):
     return (p["lat"], p["lon"])
 
 
-def _make_ring(geom, name, otype, oid):
-    if not geom:
-        return None
-    pts = [(p["lon"], p["lat"]) for p in geom if "lon" in p and "lat" in p]
-    if len(pts) < 3:
-        return None
-    return {
-        "pts": pts,
-        "name": name,
-        "otype": otype,
-        "oid": oid,
-        "bbox": _bbox(pts),
-        "centroid": _centroid(pts),
-    }
-
-
 # --- City source ------------------------------------------------------------
 
 def _city_features():
     with open(config.SLIM_PATH, encoding="utf-8") as f:
         for line in f:
             feat = json.loads(line)
-            outers = _outer_rings(feat["geometry"])
-            if not outers:
-                continue
-            allpts = [p for ring in outers for p in ring]
-            props = feat.get("properties") or {}
-            yield {
-                "name": props.get("name"),
-                "address": props.get("address"),
-                "objectid": props.get("objectid"),
-                "geom": feat["geometry"],
-                "outers": outers,
-                "bbox": _bbox(allpts),
-                "centroid": _centroid(max(outers, key=_ring_area)),
-            }
-
-
-def _outer_rings(geom):
-    """Outer ring(s) as lists of (lon, lat). Polygon -> 1, MultiPolygon -> many."""
-    coords = geom.get("coordinates")
-    if not coords:
-        return []
-    if geom["type"] == "Polygon":
-        return [[tuple(p) for p in coords[0]]]
-    if geom["type"] == "MultiPolygon":
-        return [[tuple(p) for p in poly[0]] for poly in coords if poly]
-    return []
+            geom = feat["geometry"]
+            if geom["type"] == "Point":
+                parts = [[_proj(*geom["coordinates"][:2])]]
+            else:
+                polys = (geom["coordinates"] if geom["type"] == "MultiPolygon"
+                         else [geom["coordinates"]])
+                parts = [[_proj(x, y) for x, y in poly[0]] for poly in polys]
+            yield {**feat["properties"], "geom": geom, "parts": parts,
+                   "bbox": _bbox(parts)}
 
 
 # --- Matching ---------------------------------------------------------------
 
-def _match(city, rings):
+def _match(city, osm):
+    """Pair gardens to OSM one-to-one and classify. Returns (gaps, counts)."""
+    counts = {s: 0 for s in GAP_STATUSES}
+    counts.update(matched=0, pollinator=0, pollinator_osm=0)
+    taken = set()
+    food = [c for c in city if c["kind"] == "food"]
+    pollinators = [c for c in city if c["kind"] != "food"]
+
     gaps = []
-    counts = {"missing": 0, "mismatch": 0, "unnamed": 0, "placeholder": 0}
-    for c in city:
-        match = _find_match(c, rings)
-        if match is None:
-            status = "missing"
-        elif not match["name"]:
-            status = "unnamed"
-        elif _norm(match["name"]) != _norm(c["name"]):
-            status = "mismatch"
-        else:
-            continue  # an OSM area with the same name overlaps -- not a gap
-        if is_placeholder(c["name"]):
-            status = "placeholder"
-        gaps.append(_gap_feature(c, status, match))
+    pairs = _pair(food, osm, taken)
+    for i, c in enumerate(food):
+        m = pairs.get(i)
+        status = _status(c, m)
+        if status is None:
+            counts["matched"] += 1
+            continue
         counts[status] += 1
+        gaps.append(_gap_feature(c, status, m))
+
+    pairs = _pair(pollinators, osm, taken)
+    for i, c in enumerate(pollinators):
+        m = pairs.get(i)
+        counts["pollinator"] += 1
+        counts["pollinator_osm"] += m is not None
+        gaps.append(_gap_feature(c, "pollinator", m))
     return gaps, counts
 
 
-def _find_match(c, rings):
-    """An OSM ring overlapping the City polygon, preferring a same-named one."""
-    cnorm = _norm(c["name"])
-    best = None
-    name_fallback = None
-    for r in rings:
-        if not _bbox_overlap(c["bbox"], r["bbox"]):
+def _pair(gardens, osm, taken):
+    """{garden index: (osm feature, distance)}, one-to-one, best pairs first.
+
+    Every garden/OSM pair within the radius is ranked -- names agreeing first,
+    then a community-typed OSM garden, then the nearer -- and taken greedily
+    while both sides are free. ``taken`` (OSM ids) is updated, so a later call
+    only sees what is left.
+    """
+    r = config.MATCH_RADIUS_M
+    cands = []
+    for i, c in enumerate(gardens):
+        for o in osm:
+            if (o["otype"], o["oid"]) in taken \
+                    or not _bbox_near(c["bbox"], o["bbox"], r):
+                continue
+            d = _distance(c["parts"], o["parts"])
+            if d <= r:
+                rank = (not names_agree(c.get("city_name"), o["name"]),
+                        not o["typed"], d)
+                cands.append((rank, i, o, d))
+    cands.sort(key=lambda t: (t[0], t[1]))
+    pairs = {}
+    for _rank, i, o, d in cands:
+        key = (o["otype"], o["oid"])
+        if i in pairs or key in taken:
             continue
-        same_name = bool(cnorm) and _norm(r["name"]) == cnorm
-        if _point_in_ring(c["centroid"], r["pts"]) or any(
-            _point_in_ring(r["centroid"], outer) for outer in c["outers"]
-        ):
-            if same_name:
-                return r  # exact name match settles it
-            if best is None or (r["name"] and not best["name"]):
-                best = r  # otherwise prefer a named ring over an unnamed one
-        elif same_name and name_fallback is None:
-            # Centroid tests missed (concave / multipolygon), but a same-named
-            # area overlaps this polygon's bbox -- almost certainly the match.
-            name_fallback = r
-    return best or name_fallback
+        pairs[i] = (o, d)
+        taken.add(key)
+    return pairs
 
 
-def _gap_feature(c, status, match):
+def _status(c, m):
+    if m is None:
+        return "missing" if c["footprint"] == "polygon" else "point_only"
+    o = m[0]
+    # Untyped first: a bare leisure=garden is the weakest evidence that the
+    # OSM feature IS the City's garden, so "check it, then tag it" comes before
+    # any advice about its name.
+    if not o["typed"]:
+        return "untyped"
+    if not o["name"]:
+        return "unnamed"
+    if not names_agree(c.get("city_name"), o["name"]):
+        return "name_mismatch"
+    return None
+
+
+# Words the City and OSM disagree on including -- "BRANT AVENUE COMMUNITY
+# GARDEN" is "Brant Avenue Community Garden" or "Brant Avenue Garden" alike.
+_FILLER = re.compile(r"\b(?:COMMUNITY|COMMUNAL|GARDENS?|VEGETABLE|THE|PROJECT)\b")
+
+
+def _norm(name):
+    s = re.sub(r"[^A-Z0-9 ]", "", (name or "").upper())
+    return " ".join(_FILLER.sub("", s).split())
+
+
+def names_agree(city_name, osm_name):
+    """The recalibration's rule: equal after dropping filler words, or one
+    contained in the other ("STEPHANIE DRIVE PARK COMMUNITY ORCHARD" against
+    "Stephanie Drive Park Orchard")."""
+    a, b = _norm(city_name), _norm(osm_name)
+    if not a or not b:
+        return False
+    return a == b or a in b or b in a
+
+
+def _gap_feature(c, status, m):
     props = {
-        "name": c["name"],
-        "address": c["address"],
+        "name": c.get("name"),
+        "city_name": c.get("city_name"),
+        "address": c.get("address"),
+        "type": c.get("type"),
+        "footprint": c.get("footprint"),
         "status": status,
-        "objectid": c["objectid"],
+        "garden_id": c.get("garden_id"),
     }
-    if match:
-        props["osm_name"] = match["name"]
-        props["osm_url"] = (
-            f"https://www.openstreetmap.org/{match['otype']}/{match['oid']}"
-        )
+    if m:
+        o, d = m
+        props["osm_name"] = o["name"]
+        props["osm_tag"] = _tag_label(o["tags"])
+        props["osm_m"] = round(d)
+        props["osm_url"] = f"https://www.openstreetmap.org/{o['otype']}/{o['oid']}"
     return {
         "type": "Feature",
-        "properties": props,
+        "properties": {k: v for k, v in props.items() if v is not None},
         "geometry": _round_geom(c["geom"]),
     }
 
@@ -407,43 +475,81 @@ def _write_gaps(gaps):
         json.dump({"type": "FeatureCollection", "features": gaps}, f)
 
 
-# --- Geometry helpers -------------------------------------------------------
+# --- Geometry (local metres) ------------------------------------------------
+#
+# A shape is a list of parts; a part is either a closed ring of (x, y) points
+# (first == last) or a single point.
 
-def _bbox(pts):
-    xs = [p[0] for p in pts]
-    ys = [p[1] for p in pts]
+def _proj(lon, lat):
+    return (lon * _KX, lat * _KY)
+
+
+def _bbox(parts):
+    xs = [p[0] for part in parts for p in part]
+    ys = [p[1] for part in parts for p in part]
     return (min(xs), min(ys), max(xs), max(ys))
 
 
-def _bbox_overlap(a, b):
-    return not (a[2] < b[0] or b[2] < a[0] or a[3] < b[1] or b[3] < a[1])
+def _bbox_near(a, b, r):
+    return not (a[2] + r < b[0] or b[2] + r < a[0]
+                or a[3] + r < b[1] or b[3] + r < a[1])
 
 
-def _centroid(pts):
-    """Area-weighted polygon centroid (shoelace); mean for degenerate rings."""
-    n = len(pts)
-    area = cx = cy = 0.0
-    for i in range(n):
-        x0, y0 = pts[i]
-        x1, y1 = pts[(i + 1) % n]
-        cross = x0 * y1 - x1 * y0
-        area += cross
-        cx += (x0 + x1) * cross
-        cy += (y0 + y1) * cross
-    if area == 0:
-        return (sum(p[0] for p in pts) / n, sum(p[1] for p in pts) / n)
-    area *= 0.5
-    return (cx / (6 * area), cy / (6 * area))
+def _segments(part):
+    return list(zip(part, part[1:])) if len(part) > 1 else []
 
 
-def _ring_area(pts):
-    n = len(pts)
-    area = 0.0
-    for i in range(n):
-        x0, y0 = pts[i]
-        x1, y1 = pts[(i + 1) % n]
-        area += x0 * y1 - x1 * y0
-    return abs(area) / 2
+def _distance(a_parts, b_parts):
+    """Shortest distance between two shapes; 0 if they touch or overlap."""
+    best = math.inf
+    for a in a_parts:
+        for b in b_parts:
+            best = min(best, _part_distance(a, b))
+            if best == 0:
+                return 0.0
+    return best
+
+
+def _part_distance(a, b):
+    # One inside the other.
+    if len(a) > 1 and _point_in_ring(b[0], a):
+        return 0.0
+    if len(b) > 1 and _point_in_ring(a[0], b):
+        return 0.0
+    sa, sb = _segments(a), _segments(b)
+    for p, q in sa:
+        for r, s in sb:
+            if _segments_cross(p, q, r, s):
+                return 0.0
+    best = math.inf
+    if not sa and not sb:
+        return math.dist(a[0], b[0])
+    for v in a:
+        for r, s in sb:
+            best = min(best, _point_segment(v, r, s))
+    for v in b:
+        for p, q in sa:
+            best = min(best, _point_segment(v, p, q))
+    return best
+
+
+def _point_segment(p, a, b):
+    ax, ay = a
+    dx, dy = b[0] - ax, b[1] - ay
+    len2 = dx * dx + dy * dy
+    t = 0.0 if len2 == 0 else max(0.0, min(1.0, ((p[0] - ax) * dx + (p[1] - ay) * dy) / len2))
+    return math.dist(p, (ax + t * dx, ay + t * dy))
+
+
+def _cross(o, a, b):
+    return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+
+def _segments_cross(p, q, r, s):
+    d1, d2 = _cross(r, s, p), _cross(r, s, q)
+    d3, d4 = _cross(p, q, r), _cross(p, q, s)
+    return ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0)) \
+        and d1 != 0 and d2 != 0 and d3 != 0 and d4 != 0
 
 
 def _point_in_ring(pt, pts):
@@ -463,41 +569,11 @@ def _point_in_ring(pt, pts):
     return inside
 
 
-# Generic feature words the City and OSM disagree on appending ("Trafalgar
-# Square" vs "Trafalgar Square Park", "Woodlawn Cemetery" vs "... Cemetery and
-# Crematorium"). Deliberately short: Guelph's real name variants are things like
-# "Bathgate Drive Park" against OSM's "Bathgate Park", and normalising those
-# away would hide exactly the work item the gap page exists to show.
-_GENERIC_SUFFIX = re.compile(r"\s+(?:and\s+)?(?:park|cemetery|crematorium|club)$")
-
-
-def _norm(name):
-    """Loose match key: drop the artefacts City and OSM names differ on.
-
-    Lowercases and reduces to single-spaced alphanumerics, unifies "&"/"and",
-    drops a leading article, and trims generic trailing feature words -- so
-    spatially matched parks aren't flagged as mismatches over naming convention
-    alone. Affects matching only; the displayed name keeps the raw City data.
-    """
-    if not name:
-        return ""
-    # Delete apostrophes so the City's "Oconnor" keys the same as OSM's
-    # "O'Connor" (rather than splitting into a stray "s" or "connor" token).
-    s = name.lower().replace("&", " and ").replace("'", "").replace("’", "")
-    s = re.sub(r"[^a-z0-9]+", " ", s).strip()
-    s = re.sub(r"^the\s+", "", s)
-    while True:
-        trimmed = _GENERIC_SUFFIX.sub("", s).strip()
-        if trimmed == s:
-            return s
-        s = trimmed or s  # keep the last word if the name is only generic words
-
-
 def _round_geom(geom):
     return {"type": geom["type"], "coordinates": _round(geom["coordinates"])}
 
 
 def _round(c):
     if isinstance(c, (int, float)):
-        return round(c, 5)  # ~1 m -- ample for a reference outline, smaller file
+        return round(c, 6)  # ~10 cm: a garden bed is a few metres across
     return [_round(x) for x in c]

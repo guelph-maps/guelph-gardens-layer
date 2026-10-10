@@ -2,7 +2,7 @@
 and what the trend page is rendered from.
 
 The record exists so the gap page can show the worklist shrinking week to week
-(and so a mapper can see their own parks disappear from it). Two properties
+(and so a mapper can see their own gardens disappear from it). Two properties
 matter more than the rest: a run on cached OSM must not add a point -- it saw
 nothing new, and a flat line it drew would be a lie -- and a backfill must be
 safe to interrupt and re-run, since it is paced slowly on purpose.
@@ -19,16 +19,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src import compare, config, history, site  # noqa: E402
 
-SUMMARY = {"missing": 15, "mismatch": 7, "unnamed": 3, "placeholder": 1,
-           "city": 126, "osm_rings": 277, "osm_date": "2026-09-28 22:03Z",
-           "osm_stale": False}
+SUMMARY = {"missing": 23, "point_only": 3, "unnamed": 3, "name_mismatch": 3,
+           "untyped": 1, "matched": 10, "pollinator": 27, "city": 43,
+           "osm": 74, "osm_date": "2026-09-28 22:03Z", "osm_stale": False}
 
 
 @pytest.fixture
 def paths(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DATA_DIR", str(tmp_path))
     monkeypatch.setattr(config, "HISTORY_PATH", str(tmp_path / "history.jsonl"))
-    monkeypatch.setattr(config, "SLIM_PATH", str(tmp_path / "parks-slim.geojsonl"))
+    monkeypatch.setattr(config, "SLIM_PATH", str(tmp_path / "gardens-slim.geojsonl"))
     monkeypatch.setattr(history, "seed", lambda: False)
     monkeypatch.setattr("addressvault.net.wait_for_link", lambda **k: None)
     return tmp_path
@@ -39,18 +39,19 @@ def test_a_live_run_appends_one_row_with_the_counts(paths):
     rows = history.load()
     assert len(rows) == 1
     assert rows[0] == {"date": "2026-09-28", "osm_date": "2026-09-28 22:03Z",
-                       "source": "live", "missing": 15, "mismatch": 7,
-                       "unnamed": 3, "placeholder": 1, "city": 126,
-                       "osm_rings": 277}
+                       "source": "live", "missing": 23, "point_only": 3,
+                       "unnamed": 3, "name_mismatch": 3, "untyped": 1,
+                       "matched": 10, "pollinator": 27, "city": 43,
+                       "osm": 74}
 
 
 def test_a_second_run_the_same_day_replaces_the_first(paths):
     # The scheduler retries a stale run half an hour later; the day gets the
     # later, better answer, not two points.
     history.record(SUMMARY, day="2026-09-28")
-    history.record({**SUMMARY, "missing": 14}, day="2026-09-28")
+    history.record({**SUMMARY, "missing": 22}, day="2026-09-28")
     rows = history.load()
-    assert [r["missing"] for r in rows] == [14]
+    assert [r["missing"] for r in rows] == [22]
 
 
 def test_a_run_on_cached_osm_is_not_recorded(paths):
@@ -107,23 +108,27 @@ def test_backfill_skips_dates_on_record_and_stops_on_no_answer(paths, monkeypatc
     assert slept == [30], "paced between queries, never before the first"
 
 
-def test_backfill_counts_gaps_against_the_city_polygons(paths, monkeypatch):
-    square = [(-80.25, 43.54), (-80.24, 43.54), (-80.24, 43.55), (-80.25, 43.55)]
-    city = [{"name": "Test Park", "address": "1 Test Street", "objectid": 1,
-             "geom": {"type": "Polygon", "coordinates": [list(map(list, square))]},
-             "outers": [square], "bbox": compare._bbox(square),
-             "centroid": compare._centroid(square)}]
-    monkeypatch.setattr(compare, "_city_features", lambda: iter(city))
+def test_backfill_counts_gaps_against_the_city_roster(paths, monkeypatch):
+    square = [[-80.25, 43.54], [-80.2499, 43.54], [-80.2499, 43.5401],
+              [-80.25, 43.5401], [-80.25, 43.54]]
+    rows = [("food", "polygon", {"type": "Polygon", "coordinates": [square]}),
+            ("pollinator", "point", {"type": "Point", "coordinates": [-80.2, 43.5]})]
+    with open(config.SLIM_PATH, "w", encoding="utf-8") as f:
+        for kind, footprint, geom in rows:
+            f.write(json.dumps({"type": "Feature", "geometry": geom, "properties": {
+                "name": "Test", "city_name": "TEST", "kind": kind,
+                "footprint": footprint}}) + "\n")
     monkeypatch.setattr(compare, "_try_overpass",
                         _fake_overpass([{"elements": []}]))
     history.backfill(date(2026, 6, 1), date(2026, 6, 2), 7, 0, sleep=lambda s: None)
     row = history.load()[0]
-    assert row["missing"] == 1 and row["city"] == 1 and row["osm_rings"] == 0
+    assert row["missing"] == 1 and row["city"] == 1 and row["osm"] == 0
+    assert row["pollinator"] == 1
 
 
 def test_the_history_page_inlines_the_rows_and_tables_them(paths, tmp_path):
     history.record(SUMMARY, day="2026-09-21")
-    history.record({**SUMMARY, "missing": 14}, day="2026-09-28")
+    history.record({**SUMMARY, "missing": 22}, day="2026-09-28")
     gaps_dir = tmp_path / "site" / "gaps"
     gaps_dir.mkdir(parents=True)
     site._build_history_page(str(gaps_dir), "2026-09-28")
@@ -131,7 +136,7 @@ def test_the_history_page_inlines_the_rows_and_tables_them(paths, tmp_path):
     html = (gaps_dir / "history.html").read_text(encoding="utf-8")
     assert "2 comparisons since 2026-09-21" in html
     inline = html.split('id="history-data">', 1)[1].split("</script>", 1)[0]
-    assert [r["missing"] for r in json.loads(inline)] == [15, 14]
+    assert [r["missing"] for r in json.loads(inline)] == [23, 22]
     assert html.index("<td>2026-09-28</td>") < html.index("<td>2026-09-21</td>")
     assert "{{" not in html
     assert (gaps_dir / "history.js").is_file()

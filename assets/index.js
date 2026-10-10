@@ -1,4 +1,4 @@
-// Guelph Parks landing page: preview map + copy buttons.
+// Guelph Community Gardens landing page: preview map + copy buttons.
 
 (function () {
   "use strict";
@@ -9,8 +9,10 @@
       return;
     }
 
-    var map = L.map(el, { minZoom: 11, maxZoom: 19 }).setView(
-      [43.5448, -80.2482], 13
+    // Central Guelph at z14: a dozen gardens in frame, and dots big enough
+    // to see. Below z13 there are no raster tiles at all.
+    var map = L.map(el, { minZoom: 12, maxZoom: 19 }).setView(
+      [43.5465, -80.2520], 14
     );
 
     L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {

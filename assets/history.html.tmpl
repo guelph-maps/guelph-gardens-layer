@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Guelph Parks &mdash; OSM Coverage Gaps Over Time</title>
+<title>Guelph Community Gardens &mdash; OSM Coverage Gaps Over Time</title>
 <link rel="stylesheet" href="../index.css">
 <style>
   main { max-width: 900px; }
@@ -42,10 +42,11 @@
 
 <h1>OSM coverage gaps over time</h1>
 <p class="lead">
-  How many City of Guelph parks are still <strong>missing</strong> from
-  OpenStreetMap, mapped under a <strong>different name</strong>, or mapped as an
-  <strong>unnamed</strong> area &mdash; one point per weekly comparison, so a
-  mapper can see the worklist shrink.
+  How many of the City of Guelph's food-growing community gardens are still
+  <strong>missing</strong> from OpenStreetMap, or mapped without the
+  <strong>community-garden tag</strong>, without a <strong>name</strong>, or
+  under <strong>another name</strong> &mdash; one point per weekly comparison,
+  so a mapper can see the worklist shrink.
 </p>
 <p class="meta">{{RUN_COUNT}} comparisons since {{FIRST_DATE}} &middot; last {{BUILD_DATE}} &middot;
   <a href="./">current gaps</a> &middot; <a href="history.jsonl">data (JSONL)</a></p>
@@ -56,16 +57,17 @@
 <p class="meta" style="margin-top:.75rem">
   Points in the shaded span are reconstructed after the fact from OSM's own
   history (an Overpass attic query for that date, compared against today's
-  City polygons); the rest were observed by the weekly build. Counts follow
-  the City's Park Boundary layer, so they move when the City adds or
-  renames parks, not only when someone maps one.
+  City roster); the rest were observed by the weekly build. Counts follow
+  the City's roster, so they move when the City adds or retires a garden,
+  not only when someone maps one. Pollinator patches are not counted.
 </p>
 
 <h2>Every comparison</h2>
 <table class="runs">
   <thead>
-    <tr><th>Date</th><th>Missing</th><th>Mismatch</th><th>Unnamed</th><th>Placeholder</th>
-        <th>City polygons</th><th>OSM areas</th><th>Source</th></tr>
+    <tr><th>Date</th><th>Missing</th><th>Point only</th><th>Unnamed</th><th>Name mismatch</th>
+        <th>Untyped</th><th>Matched</th><th>Pollinator</th><th>City food gardens</th>
+        <th>OSM gardens</th><th>Source</th></tr>
   </thead>
   <tbody>
 {{HISTORY_ROWS}}

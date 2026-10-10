@@ -1,7 +1,7 @@
 """Unit tests for the download link gate and the ArcGIS payload checks.
 
 Toronto's equivalent pins a mid-body resume against a 20 MB static file. This
-source is a 1.5 MB generated query, so there is nothing to resume -- what
+source is two ~50 KB generated queries, so there is nothing to resume -- what
 matters here instead is that an ArcGIS service lies with a 200: it answers an
 error, and a truncated page, with the same status code as a good extract.
 """
@@ -19,7 +19,7 @@ from addressvault import net  # noqa: E402
 from src import config, download as dl  # noqa: E402
 
 
-def _collection(n=126, **extra):
+def _collection(n=70, **extra):
     return json.dumps({
         "type": "FeatureCollection",
         "features": [{
@@ -91,10 +91,12 @@ def test_a_dropped_query_is_retried(data_dir, monkeypatch):
         return FakeResponse(_collection())
 
     monkeypatch.setattr("src.download.requests.get", get)
-    status, path = dl.download()
-    assert status == "DOWNLOADED"
-    assert state["n"] == 2
-    assert os.path.basename(path).startswith("park-boundary-")
+    got = dl.download()
+    assert {k: s for k, (s, _p) in got.items()} == {"points": "DOWNLOADED",
+                                                     "polygons": "DOWNLOADED"}
+    assert state["n"] == 3  # one retried query, then the second layer
+    assert os.path.basename(got["points"][1]).startswith("gardens-points-")
+    assert os.path.basename(got["polygons"][1]).startswith("gardens-polygons-")
 
 
 def test_out_of_retries_on_a_dead_link_raises_link_unavailable(data_dir, monkeypatch):
@@ -127,18 +129,18 @@ def test_an_arcgis_error_is_not_written_as_data(data_dir, monkeypatch):
                         lambda *a, **k: FakeResponse(body))
     with pytest.raises(RuntimeError, match="error"):
         dl.download()
-    assert not list(data_dir.glob("park-boundary-*.geojson"))
+    assert not list(data_dir.glob("gardens-*.geojson"))
 
 
 def test_a_truncated_page_stops_the_run(data_dir, monkeypatch):
-    # A partial extract is the dangerous failure: the parks that fell off the
-    # end would be reported to mappers as missing from OSM.
+    # A partial extract is the dangerous failure: the gardens that fell off the
+    # end would silently leave the roster.
     body = _collection(n=10, exceededTransferLimit=True)
     monkeypatch.setattr("src.download.requests.get",
                         lambda *a, **k: FakeResponse(body))
     with pytest.raises(RuntimeError, match="exceededTransferLimit"):
         dl.download()
-    assert not list(data_dir.glob("park-boundary-*.geojson"))
+    assert not list(data_dir.glob("gardens-*.geojson"))
 
 
 def test_an_unchanged_extract_skips_the_write(data_dir, monkeypatch):
@@ -146,19 +148,39 @@ def test_an_unchanged_extract_skips_the_write(data_dir, monkeypatch):
     # no meaningful Last-Modified, it is generated when you ask.
     monkeypatch.setattr("src.download.requests.get",
                         lambda *a, **k: FakeResponse(_collection()))
-    first_status, first_path = dl.download()
-    assert first_status == "DOWNLOADED"
+    first = dl.download()
+    assert first["points"][0] == "DOWNLOADED"
 
-    second_status, second_path = dl.download()
-    assert (second_status, second_path) == ("SKIPPED", first_path)
-    assert len(list(data_dir.glob("park-boundary-*.geojson"))) == 1
+    second = dl.download()
+    assert second["points"] == ("SKIPPED", first["points"][1])
+    assert second["polygons"] == ("SKIPPED", first["polygons"][1])
+    assert len(list(data_dir.glob("gardens-points-*.geojson"))) == 1
 
 
 def test_a_changed_extract_is_written(data_dir, monkeypatch):
     monkeypatch.setattr("src.download.requests.get",
-                        lambda *a, **k: FakeResponse(_collection(n=126)))
+                        lambda *a, **k: FakeResponse(_collection(n=70)))
     dl.download()
     monkeypatch.setattr("src.download.requests.get",
-                        lambda *a, **k: FakeResponse(_collection(n=127)))
-    status, _path = dl.download()
+                        lambda *a, **k: FakeResponse(_collection(n=71)))
+    status, _path = dl.download()["points"]
     assert status == "DOWNLOADED"
+
+
+def test_a_failure_on_the_second_layer_writes_neither(data_dir, monkeypatch):
+    # A new roster beside last week's footprints (or the reverse) is a join
+    # nobody asked for; both are fetched and checked before either is written.
+    bodies = [FakeResponse(_collection()),
+              FakeResponse(json.dumps({"error": {"code": 500}}).encode())]
+    monkeypatch.setattr("src.download.requests.get", lambda *a, **k: bodies.pop(0))
+    with pytest.raises(RuntimeError, match="error"):
+        dl.download()
+    assert not list(data_dir.glob("gardens-*.geojson"))
+
+
+def test_latest_picks_the_newest_dated_file(data_dir):
+    for name in ("gardens-points-2026-06-11.geojson", "gardens-points-2026-10-09.geojson",
+                 "gardens-polygons-2025-06-30.geojson"):
+        (data_dir / name).write_text("{}")
+    assert dl.latest("points").endswith("gardens-points-2026-10-09.geojson")
+    assert dl.latest("polygons").endswith("gardens-polygons-2025-06-30.geojson")

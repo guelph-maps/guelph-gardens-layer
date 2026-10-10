@@ -1,25 +1,19 @@
-"""Download the Guelph Park Boundary GeoJSON from the City's ArcGIS service.
+"""Download the City's two Community Gardens layers from its ArcGIS service.
 
-This is the one step that differs structurally from the toronto-parks-layer
-template. Toronto downloads a static file from CKAN and smart-caches it on a
-HEAD request: Last-Modified plus Content-Length against a small JSON sidecar.
-Guelph publishes an ArcGIS FeatureServer, and a `/query` endpoint has neither
-of those -- it is generated per request, so Last-Modified is the moment you
-asked and Content-Length varies with nothing but the query.
+The roster (points, layer 18) and the footprints (polygons, layer 28) are
+fetched the same way the parks sibling fetches Park Boundary: an ArcGIS
+``/query`` has no meaningful Last-Modified -- it is generated when you ask --
+so each body is hashed, and an unchanged hash keeps the existing dated file.
+That keeps each file's date meaning "when the City last changed this layer",
+which is worth having twice over here: the roster moves, the footprints have
+been frozen since 2025-06, and the site says so.
 
-So the cache key changes and nothing else does. The body is ~1.5 MB, cheap
-enough to fetch every time; what is compared is a **sha256 of the response**.
-Identical hash means the City has not touched the layer, and the existing dated
-file is kept -- which also keeps DATA_DATE meaning "when the City data last
-changed" rather than "when the build last ran", exactly as the Last-Modified
-filename does for Toronto.
-
-The output contract is unchanged: one dated GeoJSON FeatureCollection in data/,
-which is all `slim` and the rest of the pipeline know about.
+Output contract: one dated GeoJSON FeatureCollection per layer in data/
+(gardens-points-DATE.geojson, gardens-polygons-DATE.geojson), which is all
+`slim` knows about.
 
 Every request is gated on a usable link first (``addressvault.net``, the same
-gate the address vault pulls behind). The weekly trigger is what makes that
-worth doing: a run lost to a dead link is not retried until next Monday.
+gate the address vault pulls behind).
 """
 
 import hashlib
@@ -33,51 +27,74 @@ from addressvault import net
 
 from src import config
 
-# The Park Boundary layer is 126 polygons, ~1.5 MB of GeoJSON -- a retry costs
-# a couple of seconds when the link is healthy and buys back a week when it is
-# not.
+# Each layer is ~50 KB. A retry costs a couple of seconds when the link is
+# healthy and buys back a week when it is not.
 RETRIES = 3
 RETRY_WAIT = 30
 
 
 def download(force=False):
-    """Download the latest Park Boundary GeoJSON.
+    """Download both layers.
 
-    Returns (status, filepath) where status is "DOWNLOADED" or "SKIPPED".
-    Raises ``net.LinkUnavailable`` when the host has no usable link: nothing was
-    attempted, so the caller exits 75 rather than reporting a build failure.
+    Returns {key: (status, filepath)} where status is "DOWNLOADED" or
+    "SKIPPED". Raises ``net.LinkUnavailable`` when the host has no usable link:
+    nothing was attempted, so the caller exits 75 rather than reporting a build
+    failure.
     """
     os.makedirs(config.DATA_DIR, exist_ok=True)
 
-    # Ask before doing anything. Offline or metered, nothing below can work, and
-    # finding out here costs a second instead of a 600 s read timeout. Never
-    # block waiting for the link: the task carries a hard ExecutionTimeLimit, so
-    # a wait would be killed mid-sleep -- retrying is the scheduler's job.
+    # Ask before doing anything; never block waiting for the link -- the task
+    # carries a hard ExecutionTimeLimit, and retrying is the scheduler's job.
     net.wait_for_link(wait=False)
 
-    print("Querying the Park Boundary FeatureServer ...")
-    body = _fetch(config.DATASET_URL)
-    _check_payload(body)
-    digest = hashlib.sha256(body).hexdigest()
+    # Fetch and check both before writing either, so a run that fails halfway
+    # never leaves a new roster beside last week's footprints, or the reverse.
+    bodies = {}
+    for key, (layer, _prefix) in config.SOURCES.items():
+        print(f"Querying Community Gardens {key} (layer {layer}) ...")
+        body = _fetch(config.dataset_url(layer))
+        _check_payload(body)
+        bodies[key] = body
 
     sidecar = _load_sidecar()
-    if not force and sidecar and sidecar.get("sha256") == digest:
-        existing = os.path.join(config.DATA_DIR, sidecar.get("filename", ""))
+    results = {}
+    for key, body in bodies.items():
+        results[key] = _save(key, body, sidecar, force)
+    _save_sidecar(sidecar)
+    return results
+
+
+def _save(key, body, sidecar, force):
+    digest = hashlib.sha256(body).hexdigest()
+    prior = sidecar.get(key) or {}
+    if not force and prior.get("sha256") == digest:
+        existing = os.path.join(config.DATA_DIR, prior.get("filename", ""))
         if os.path.isfile(existing):
-            print("Unchanged since the last download.")
+            print(f"  {key}: unchanged since the last download.")
             return "SKIPPED", existing
 
-    # No server-side edit date exists on this service (the layer has no
-    # editingInfo and no last_edited_date field), so the file is dated by the
-    # day the change was first seen here.
-    filename = f"park-boundary-{date.today().isoformat()}.geojson"
+    # No server-side edit date exists for the layer as a whole (editingInfo is
+    # null), so the file is dated by the day the change was first seen here.
+    prefix = config.SOURCES[key][1]
+    filename = f"{prefix}-{date.today().isoformat()}.geojson"
     filepath = os.path.join(config.DATA_DIR, filename)
     with open(filepath, "wb") as f:
         f.write(body)
-    print(f"Done: {filepath} ({len(body) // 1024:,} KB)")
-
-    _save_sidecar(digest, len(body), filename)
+    print(f"  {key}: {filepath} ({len(body) // 1024:,} KB)")
+    sidecar[key] = {"sha256": digest, "bytes": len(body), "filename": filename}
     return "DOWNLOADED", filepath
+
+
+def latest(key):
+    """Path of the newest downloaded file for source ``key``."""
+    prefix = config.SOURCES[key][1] + "-"
+    files = sorted(
+        f for f in os.listdir(config.DATA_DIR)
+        if f.startswith(prefix) and f.endswith(".geojson")
+    ) if os.path.isdir(config.DATA_DIR) else []
+    if not files:
+        raise RuntimeError(f"No {key} GeoJSON in data/. Run 'download' first.")
+    return os.path.join(config.DATA_DIR, files[-1])
 
 
 def _fetch(url):
@@ -94,8 +111,7 @@ def _fetch(url):
         except requests.RequestException as e:
             if attempt == RETRIES:
                 # Out of retries. If the link itself is down then this was never
-                # a City failure -- say so, and the run exits 75 instead of
-                # logging a build error against a service never reached at all.
+                # a City failure -- say so, and the run exits 75.
                 net.wait_for_link(wait=False)
                 raise
             print(f"  query failed ({e}); retrying in {RETRY_WAIT}s")
@@ -108,10 +124,9 @@ def _check_payload(body):
     An ArcGIS service answers an error with HTTP 200 and a JSON body carrying an
     ``error`` object, so raise_for_status proves nothing. It also silently
     truncates a page at maxRecordCount and sets ``exceededTransferLimit``; at
-    126 rows against a limit of 100,000 that cannot happen today, so this
-    raises rather than paginating -- a partial extract would report the parks
-    that fell off the end as missing from OSM, and that is worth stopping for,
-    not working around.
+    ~70 rows against a limit of 100,000 that cannot happen today, so this
+    raises rather than paginating -- a partial roster would report the gardens
+    that fell off the end as gone.
     """
     try:
         doc = json.loads(body)
@@ -137,11 +152,9 @@ def _load_sidecar():
     if os.path.isfile(config.LAST_DOWNLOAD_PATH):
         with open(config.LAST_DOWNLOAD_PATH, encoding="utf-8") as f:
             return json.load(f)
-    return None
+    return {}
 
 
-def _save_sidecar(digest, size, filename):
+def _save_sidecar(sidecar):
     with open(config.LAST_DOWNLOAD_PATH, "w", encoding="utf-8") as f:
-        json.dump(
-            {"sha256": digest, "bytes": size, "filename": filename}, f, indent=2
-        )
+        json.dump(sidecar, f, indent=2)

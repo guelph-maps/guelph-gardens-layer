@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Guelph Parks &mdash; Reference Layer for OSM Editors</title>
+<title>Guelph Community Gardens &mdash; Reference Layer for OSM Editors</title>
 <link rel="stylesheet" href="index.css">
 <link rel="stylesheet"
       href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -17,54 +17,60 @@
 <body>
 <main>
 
-<h1>Guelph Parks</h1>
+<h1>Guelph Community Gardens</h1>
 <p class="lead">
-  A reference layer of the park boundaries published by the City of Guelph
-  &mdash; <strong>{{PARK_COUNT}}</strong> polygons with their official names
-  &mdash; ready to add to the
+  A reference layer of the community gardens on the City of Guelph's roster
+  &mdash; <strong>{{FOOD_COUNT}}</strong> food-growing gardens and
+  <strong>{{POLLINATOR_COUNT}}</strong> pollinator patches, with the City's
+  outline wherever it has drawn one &mdash; ready to add to the
   <a href="https://www.openstreetmap.org">OpenStreetMap</a> editors
   <strong>iD</strong> and <strong>JOSM</strong> while you map.
 </p>
-<p class="meta">City data: {{DATA_DATE}} &middot; tiles rebuilt: {{BUILD_DATE}}</p>
+<p class="meta">City roster: {{POINTS_DATE}} &middot; City footprints: {{POLYGONS_DATE}} &middot; tiles rebuilt: {{BUILD_DATE}}</p>
 
 <div class="attribution">
   <a href="{{LICENSE_URL}}">{{LICENSE_NOTICE}}</a>
-  Source: <a href="{{DATASET_PAGE}}">Park Boundary</a>.
+  Sources: <a href="{{POINTS_PAGE}}">Community Gardens</a> and
+  <a href="{{POLYGONS_PAGE}}">Community Gardens Polygons</a>.
 </div>
 
 <h2>Preview</h2>
 <div id="preview-map" data-raster-url="{{RASTER_URL}}"></div>
 <p class="meta">
-  The raster layer drawn over OpenStreetMap: park boundaries with names.
-  Pan and zoom to check coverage for the area you map.
+  The raster layer drawn over OpenStreetMap. Green outlines are the City's
+  garden footprints; a green dot marks a food garden too small to see at this
+  zoom or with no footprint at all; amber dots are pollinator patches.
 </p>
 
 <div class="attribution">
-  <strong>Coverage vs OpenStreetMap:</strong> see which City parks are
-  <a href="gaps/">missing from OSM or named differently</a> &mdash; a mapper's
-  worklist with an interactive map and table.
+  <strong>Coverage vs OpenStreetMap:</strong> see which City gardens are
+  <a href="gaps/">missing from OSM, untagged, unnamed or named differently</a>
+  &mdash; a mapper's worklist with an interactive map and table.
 </div>
 
 <h2>Two layers &mdash; which to use</h2>
 <table>
   <tr>
     <th>Vector layer</th>
-    <td>Interactive. Click a polygon to read its tags
-        (<code>name</code>, <code>address</code>, <code>objectid</code>).
+    <td>Interactive. Click a garden to read its tags (<code>name</code>,
+        <code>city_name</code>, <code>type</code>, <code>kind</code>,
+        <code>address</code>, <code>footprint</code>, <code>garden_id</code>).
         Best in <strong>iD</strong>.</td>
   </tr>
   <tr>
     <th>Raster layer</th>
-    <td>Boundaries and park names drawn directly on the tiles. A readable
+    <td>Outlines, dots and names drawn directly on the tiles. A readable
         backdrop. Best in <strong>JOSM</strong>.</td>
   </tr>
 </table>
 
 <div class="note">
-  <strong>Heads-up:</strong> at city-overview zooms only parks big enough to
-  read are labelled &mdash; big parks from city zoom, small parkettes as you
-  zoom in. From the closer raster zooms inward every named park is labelled;
-  small parks carry their name just below the polygon so it never overhangs.
+  <strong>Treat the outline as a hint, not a trace.</strong> Many of the City's
+  footprints are a single bed &mdash; the median is about 230&nbsp;m&sup2;
+  &mdash; and the footprint layer has not been redrawn since mid-2025. Map
+  what is on the ground or in current imagery, usually
+  <code>leisure=garden</code> + <code>garden:type=community</code> around the
+  whole plot area.
 </div>
 
 <h2>Add to iD</h2>
@@ -74,7 +80,7 @@
   <li>Under <em>Custom Map Data</em>, open the settings and paste this URL:</li>
 </ol>
 <pre class="url">{{VECTOR_URL}}</pre>
-<p>Zoom in, then click any park to see its tags in the inspector.</p>
+<p>Zoom in, then click any garden to see its tags in the inspector.</p>
 
 <h3>Raster layer (visible names)</h3>
 <ol>
@@ -92,8 +98,8 @@
 </ol>
 <pre class="url">tms[13,17]:{{RASTER_URL_JOSM}}</pre>
 <p>
-  Give it a name such as <em>Guelph Parks</em>, click OK, then enable
-  it from the <em>Imagery</em> menu. Note JOSM's placeholder is
+  Give it a name such as <em>Guelph Community Gardens</em>, click OK, then
+  enable it from the <em>Imagery</em> menu. Note JOSM's placeholder is
   <code>{zoom}</code>, not <code>{z}</code>.
 </p>
 
@@ -106,27 +112,30 @@
 
 <h2>Notes</h2>
 <ul>
-  <li>Every park the City publishes as in use is kept; parks flagged retired,
-      proposed or planned would be dropped (today the City publishes none).
-      The one polygon the City calls &ldquo;Unnamed Neighbourhood Park&rdquo;
-      is filtered out of the tiles &mdash; that is a placeholder, not a name.</li>
-  <li>Names come from the City's cased <code>Name</code> field, not its ALL CAPS
-      <code>ParkName</code>. A few carry the City's own casing slips
-      (&ldquo;O'connor&rdquo;, &ldquo;I.o.d.e.&rdquo;) &mdash; fix those by hand
-      rather than copying them.</li>
-  <li>Vector tiles are pre-rendered through zoom 19; raster tiles for
+  <li>The City's point layer is the <strong>roster</strong>: it decides which
+      gardens exist and what they are called. It is kept current (two gardens
+      added in June 2026). The polygon layer only lends a garden its outline,
+      joined on the City's garden id; the three newest gardens have none and
+      are drawn as a dot.</li>
+  <li>Gardens the City marks as future are left out.</li>
+  <li>Names are the City's ALL CAPS roster names, title-cased for the map
+      (<code>city_name</code> keeps them verbatim). Check the sign before
+      copying one.</li>
+  <li><strong>Pollinator patches</strong> are drawn but kept apart: OSM has no
+      settled tag for a pollinator garden, and the gap page does not count them.</li>
+  <li>Vector tiles are pre-rendered for zooms 12&ndash;19; raster tiles for
       z13&ndash;17 (the editor overzooms them further).</li>
   <li>Tiles are refreshed weekly from the City's service.</li>
   <li>This is a <strong>reference</strong> layer &mdash; verify against survey or
-      imagery before copying anything into OpenStreetMap. The City's boundary is
-      the parcel it owns, which can include a road allowance or a stormwater
-      block that nobody would call part of the park.</li>
+      imagery before copying anything into OpenStreetMap.</li>
 </ul>
 
 <footer>
   <a href="https://github.com/{{GITHUB_REPO}}">Project source on GitHub</a>
   &nbsp;&middot;&nbsp;
-  <a href="https://skfd.github.io/toronto-parks-layer/">Toronto parks layer</a>
+  <a href="https://guelph-maps.github.io/guelph-parks-layer/">Guelph parks layer</a>
+  &nbsp;&middot;&nbsp;
+  <a href="https://github.com/guelph-maps">guelph-maps</a>
 </footer>
 
 </main>

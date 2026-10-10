@@ -4,9 +4,10 @@
   "use strict";
 
   var COLORS = {
-    missing: "#7048e8", mismatch: "#1c7ed6", unnamed: "#e8590c",
-    placeholder: "#868e96",
+    missing: "#7048e8", point_only: "#c2255c", untyped: "#0c8599",
+    unnamed: "#e8590c", name_mismatch: "#1c7ed6", pollinator: "#e69100",
   };
+  var STATUSES = Object.keys(COLORS);
   var map;
   var features = [];
   var markers = [];      // CircleMarker per feature, indexed like features
@@ -49,7 +50,7 @@
       var center = centroid(f.geometry);
       f._center = center;
       var m = L.circleMarker(center, {
-        radius: 6,
+        radius: f.properties.status === "pollinator" ? 4 : 6,
         color: "#fff",
         weight: 1,
         fillColor: COLORS[f.properties.status] || "#888",
@@ -65,8 +66,12 @@
     wireControls();
   }
 
-  // Centroid of a (Multi)Polygon's first/largest outer ring -> [lat, lng].
+  // A Point's position, or the centroid of a (Multi)Polygon's largest outer
+  // ring -> [lat, lng].
   function centroid(geom) {
+    if (geom.type === "Point") {
+      return [geom.coordinates[1], geom.coordinates[0]];
+    }
     var rings = geom.type === "Polygon"
       ? [geom.coordinates[0]]
       : geom.coordinates.map(function (poly) { return poly[0]; });
@@ -134,9 +139,14 @@
   function popupHtml(f) {
     var p = f.properties;
     var h = "<strong>" + esc(p.name || "(unnamed)") + "</strong><br>" +
+      esc(p.type || "") + "<br>" +
       esc(p.address || "") + " &middot; " + p.status;
-    if (p.status === "mismatch") {
-      h += "<br>OSM name: " + (p.osm_name ? esc(p.osm_name) : "<em>none</em>");
+    if (p.footprint === "point") {
+      h += "<br><em>The City has no outline for this garden.</em>";
+    }
+    if (p.osm_url) {
+      h += "<br>OSM: " + (p.osm_name ? esc(p.osm_name) : "<em>no name</em>") +
+        " (" + esc(p.osm_tag || "") + ", " + p.osm_m + "&nbsp;m)";
     }
     var links = osmPairHtml(f);
     if (links) { h += "<br>" + links; }
@@ -153,10 +163,11 @@
       var links = osmPairHtml(f);
       var osm = links
         ? (p.osm_name ? '<span class="osm-name">' + esc(p.osm_name) + "</span>" : "") +
+          (p.osm_tag ? '<span class="osm-tag">' + esc(p.osm_tag) + "</span>" : "") +
           '<span class="osm-links">' + links + "</span>"
         : '<span class="osm-blank">&mdash;</span>';
       return '<tr data-i="' + p._i + '" data-status="' + p.status +
-        '" data-name="' + esc((p.name || "").toLowerCase()) + '">' +
+        '" data-name="' + esc(((p.name || "") + " " + (p.osm_name || "")).toLowerCase()) + '">' +
         "<td>" + esc(p.name || "(unnamed)") + "</td>" +
         "<td>" + esc(p.address || "") + "</td>" +
         '<td class="status-' + p.status + '">' + p.status + "</td>" +
@@ -179,6 +190,9 @@
     if (highlight) { map.removeLayer(highlight); }
     highlight = L.geoJSON(f, {
       style: { color: "#0a7", weight: 3, fill: false },
+      pointToLayer: function (_feat, ll) {
+        return L.circleMarker(ll, { radius: 14, color: "#0a7", weight: 3, fill: false });
+      },
     }).addTo(map);
     map.fitBounds(highlight.getBounds(), { maxZoom: 17, padding: [40, 40] });
     if (markers[i]) { markers[i].openPopup(); }
@@ -193,12 +207,10 @@
   }
 
   function wireControls() {
-    var boxes = {
-      missing: document.getElementById("show-missing"),
-      mismatch: document.getElementById("show-mismatch"),
-      unnamed: document.getElementById("show-unnamed"),
-      placeholder: document.getElementById("show-placeholder"),
-    };
+    var boxes = {};
+    STATUSES.forEach(function (k) {
+      boxes[k] = document.getElementById("show-" + k);
+    });
     var filter = document.getElementById("filter");
 
     function statusOn(status) {
@@ -211,8 +223,8 @@
 
       features.forEach(function (f) {
         var p = f.properties;
-        var hit = statusOn(p.status) &&
-          (!q || (p.name || "").toLowerCase().indexOf(q) > -1);
+        var hit = statusOn(p.status) && (!q ||
+          ((p.name || "") + " " + (p.osm_name || "")).toLowerCase().indexOf(q) > -1);
         var m = markers[p._i];
         if (hit && !map.hasLayer(m)) { map.addLayer(m); }
         else if (!hit && map.hasLayer(m)) { map.removeLayer(m); }

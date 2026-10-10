@@ -1,4 +1,4 @@
-// Gap history page: a three-series line chart of the recorded compare runs,
+// Gap history page: a five-series line chart of the recorded compare runs,
 // drawn as inline SVG from the rows embedded in the page. Same colours as the
 // gap map's markers, so "missing" is the same purple here and there.
 
@@ -7,8 +7,10 @@
 
   var SERIES = [
     { key: "missing", label: "Missing in OSM", short: "missing", color: "#7048e8" },
-    { key: "mismatch", label: "Name mismatch", short: "name mismatch", color: "#1c7ed6" },
-    { key: "unnamed", label: "OSM area unnamed", short: "unnamed", color: "#e8590c" },
+    { key: "point_only", label: "No footprint, not in OSM", short: "point only", color: "#c2255c" },
+    { key: "untyped", label: "OSM garden untyped", short: "untyped", color: "#0c8599" },
+    { key: "unnamed", label: "OSM garden unnamed", short: "unnamed", color: "#e8590c" },
+    { key: "name_mismatch", label: "Name mismatch", short: "name mismatch", color: "#1c7ed6" },
   ];
   var W = 860, H = 320;
   var M = { top: 16, right: 150, bottom: 36, left: 48 };

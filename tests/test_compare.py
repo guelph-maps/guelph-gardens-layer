@@ -61,7 +61,7 @@ def _post(by_host):
 @pytest.fixture
 def paths(tmp_path, monkeypatch):
     """Point the cache + sidecar at a temp dir, and never really sleep."""
-    monkeypatch.setattr(config, "OSM_CACHE_PATH", str(tmp_path / "osm-parks.json"))
+    monkeypatch.setattr(config, "OSM_CACHE_PATH", str(tmp_path / "osm-gardens.json"))
     monkeypatch.setattr(config, "OSM_FETCH_PATH", str(tmp_path / ".osm-fetch.json"))
     monkeypatch.setattr(compare.time, "sleep", lambda _s: None)
     return tmp_path
@@ -101,7 +101,7 @@ def test_the_mirror_list_is_retried_before_giving_up(paths, monkeypatch):
 def test_an_implausibly_small_reply_is_not_accepted(paths, monkeypatch):
     # overpass.osm.ch serves a Switzerland extract and answers a Guelph bbox
     # with HTTP 200 and zero elements. Believing it would report every City
-    # park as missing from OSM -- 126 fictional gaps.
+    # garden as missing from OSM.
     monkeypatch.setattr(config, "OVERPASS_URLS",
                         ("https://regional.example/api", "https://good.example/api"))
     post = _post({"regional.example": FakeResponse({"elements": []}),
@@ -196,13 +196,19 @@ def test_being_offline_is_not_reported_as_an_overpass_outage(paths, monkeypatch)
     assert from_cache is True
 
 
-def test_a_mirror_without_an_osm3s_block_still_dates_the_page(paths, monkeypatch):
-    monkeypatch.setattr(config, "OVERPASS_URLS", ("https://terse.example/api",))
+def test_a_reply_that_does_not_say_how_old_it_is_is_not_accepted(paths, monkeypatch):
+    # The template dated such a reply "today". A mirror that will not state its
+    # OSM base cannot be shown to be fresh, so it counts as no answer.
+    monkeypatch.setattr(config, "OVERPASS_URLS",
+                        ("https://terse.example/api", "https://good.example/api"))
     terse = {"elements": GOOD["elements"]}
-    monkeypatch.setattr(compare.requests, "post",
-                        _post({"terse.example": FakeResponse(terse)}))
-    _data, osm_date, _from_cache = compare._load_osm()
-    assert osm_date.startswith("20")
+    post = _post({"terse.example": FakeResponse(terse),
+                  "good.example": FakeResponse(GOOD)})
+    monkeypatch.setattr(compare.requests, "post", post)
+    _data, osm_date, from_cache = compare._load_osm()
+    assert from_cache is False
+    assert osm_date == f"{OSM_BASE[:10]} {OSM_BASE[11:16]}Z"
+    assert [u.split("/")[2] for u in post.calls] == ["terse.example", "good.example"]
 
 
 def test_the_cache_date_falls_back_to_the_file_mtime(paths, monkeypatch):
@@ -222,3 +228,140 @@ def test_a_stale_comparison_says_so_on_the_page():
 
 def test_a_fresh_comparison_adds_nothing():
     assert site._osm_note({"osm_stale": False, "osm_date": "2026-08-17"}) == ""
+
+
+# --- matching ---------------------------------------------------------------
+#
+# Coordinates are lon/lat near Guelph; at this latitude 0.0001 deg of longitude
+# is ~8 m and of latitude ~11 m.
+
+X, Y = -80.25, 43.54
+COMMUNITY = {"leisure": "garden", "garden:type": "community"}
+
+
+def _box(x, y, dx=0.0002, dy=0.0002):
+    return [[x, y], [x + dx, y], [x + dx, y + dy], [x, y + dy], [x, y]]
+
+
+def _garden(name, x, y, kind="food", footprint="polygon"):
+    geom = ({"type": "Polygon", "coordinates": [_box(x, y)]}
+            if footprint == "polygon" else {"type": "Point", "coordinates": [x, y]})
+    return {"type": "Feature", "geometry": geom, "properties": {
+        "name": name.title(), "city_name": name, "kind": kind,
+        "footprint": footprint}}
+
+
+def _osm_way(oid, x, y, **tags):
+    return {"type": "way", "id": oid, "tags": tags,
+            "geometry": [{"lon": a, "lat": b} for a, b in _box(x, y)]}
+
+
+def _run(monkeypatch, tmp_path, gardens, elements):
+    slim = tmp_path / "gardens-slim.geojsonl"
+    slim.write_text("".join(json.dumps(g) + "\n" for g in gardens), encoding="utf-8")
+    monkeypatch.setattr(config, "SLIM_PATH", str(slim))
+    city = list(compare._city_features())
+    gaps, counts = compare._match(city, compare._osm_gardens({"elements": elements}))
+    return {g["properties"]["city_name"]: g["properties"] for g in gaps}, counts
+
+
+def test_one_osm_garden_cannot_stand_for_two_city_gardens(monkeypatch, tmp_path):
+    # Parkwood and West Village Co-op Youth Farm, side by side at 170 Stephanie
+    # Drive, both lie within reach of OSM way 1136007863. Counting it twice
+    # hid one garden from the worklist.
+    gaps, counts = _run(monkeypatch, tmp_path, [
+        _garden("PARKWOOD COMMUNITY GARDEN", X, Y),
+        _garden("WEST VILLAGE CO-OP YOUTH FARM", X + 0.0003, Y),
+    ], [_osm_way(1136007863, X, Y, name="Stephanie Drive Community Garden", **COMMUNITY)])
+    assert counts["missing"] == 1
+    assert gaps["PARKWOOD COMMUNITY GARDEN"]["status"] == "name_mismatch"
+    assert gaps["WEST VILLAGE CO-OP YOUTH FARM"]["status"] == "missing"
+
+
+def test_a_name_that_agrees_wins_the_contested_osm_garden(monkeypatch, tmp_path):
+    gaps, counts = _run(monkeypatch, tmp_path, [
+        _garden("NEARER COMMUNITY GARDEN", X, Y),
+        _garden("SKOV PARK COMMUNITY GARDEN", X + 0.0003, Y),
+    ], [_osm_way(1, X, Y, name="Skov Park Garden", **COMMUNITY)])
+    assert counts["matched"] == 1
+    assert gaps["NEARER COMMUNITY GARDEN"]["status"] == "missing"
+    assert "SKOV PARK COMMUNITY GARDEN" not in gaps
+
+
+def test_the_radius_is_measured_from_the_edge(monkeypatch, tmp_path):
+    # ~16 m east of the footprint's edge: matched. ~40 m: not.
+    near = _osm_way(1, X + 0.0002 + 0.0002, Y, name="Near", **COMMUNITY)
+    gaps, _ = _run(monkeypatch, tmp_path, [_garden("NEAR", X, Y)], [near])
+    assert "NEAR" not in gaps
+    far = _osm_way(2, X + 0.0002 + 0.0005, Y, name="Far", **COMMUNITY)
+    gaps, _ = _run(monkeypatch, tmp_path, [_garden("FAR", X, Y)], [far])
+    assert gaps["FAR"]["status"] == "missing"
+
+
+def test_a_garden_mapped_as_a_node_counts(monkeypatch, tmp_path):
+    node = {"type": "node", "id": 5, "lon": X + 0.0001, "lat": Y + 0.0001,
+            "tags": {"name": "Eramosa Food Forest", **COMMUNITY}}
+    gaps, counts = _run(monkeypatch, tmp_path,
+                        [_garden("ERAMOSA FOOD FOREST", X, Y)], [node])
+    assert counts["matched"] == 1 and not gaps
+
+
+def test_statuses_of_a_match(monkeypatch, tmp_path):
+    gardens = [_garden("A GARDEN", X, Y), _garden("B GARDEN", X, Y + 0.01),
+               _garden("C GARDEN", X, Y + 0.02), _garden("D GARDEN", X, Y + 0.03)]
+    osm = [_osm_way(1, X, Y, **COMMUNITY),                                  # no name
+           _osm_way(2, X, Y + 0.01, name="Other", **COMMUNITY),             # other name
+           _osm_way(3, X, Y + 0.02, name="C Garden", leisure="garden"),     # bare garden
+           _osm_way(4, X, Y + 0.03, name="D", landuse="allotments")]        # fine
+    gaps, counts = _run(monkeypatch, tmp_path, gardens, osm)
+    assert gaps["A GARDEN"]["status"] == "unnamed"
+    assert gaps["B GARDEN"]["status"] == "name_mismatch"
+    assert gaps["C GARDEN"]["status"] == "untyped"
+    assert gaps["C GARDEN"]["osm_tag"] == "leisure=garden"
+    assert "D GARDEN" not in gaps and counts["matched"] == 1
+
+
+def test_a_garden_with_no_footprint_is_point_only(monkeypatch, tmp_path):
+    gaps, counts = _run(monkeypatch, tmp_path,
+                        [_garden("GOLFVIEW GARDEN GUILD", X, Y, footprint="point")], [])
+    assert gaps["GOLFVIEW GARDEN GUILD"]["status"] == "point_only"
+    assert counts["point_only"] == 1 and counts["missing"] == 0
+
+
+def test_pollinator_patches_are_listed_never_counted(monkeypatch, tmp_path):
+    # And they only get the OSM gardens the food gardens left over.
+    gaps, counts = _run(monkeypatch, tmp_path, [
+        _garden("BEE PATCH", X, Y, kind="pollinator", footprint="point"),
+        _garden("FOOD", X, Y),
+    ], [_osm_way(1, X, Y, name="Food", **COMMUNITY)])
+    assert gaps["BEE PATCH"]["status"] == "pollinator"
+    assert "osm_url" not in gaps["BEE PATCH"]
+    assert counts["pollinator"] == 1 and counts["missing"] == 0
+    assert sum(counts[s] for s in compare.GAP_STATUSES) == 0
+
+
+def test_an_open_way_is_not_a_garden(monkeypatch, tmp_path):
+    line = {"type": "way", "id": 9, "tags": COMMUNITY,
+            "geometry": [{"lon": X, "lat": Y}, {"lon": X + 0.0002, "lat": Y}]}
+    gaps, _ = _run(monkeypatch, tmp_path, [_garden("G", X, Y)], [line])
+    assert gaps["G"]["status"] == "missing"
+
+
+def test_names_agree():
+    assert compare.names_agree("BRANT AVENUE COMMUNITY GARDEN", "Brant Avenue Garden")
+    assert compare.names_agree("STEPHANIE DRIVE PARK COMMUNITY ORCHARD",
+                               "Stephanie Drive Park Orchard")
+    assert compare.names_agree("ST. GEORGE'S PARK COMMUNITY GARDEN",
+                               "St. George's Park Community Garden")
+    assert not compare.names_agree("PARKWOOD COMMUNITY GARDEN",
+                                   "Stephanie Drive Community Garden")
+    assert not compare.names_agree("COMMUNITY GARDEN", "Community Garden")
+    assert not compare.names_agree("A GARDEN", None)
+
+
+def test_distance_overlapping_shapes_is_zero():
+    a = [compare._proj(x, y) for x, y in _box(X, Y)]
+    b = [compare._proj(x, y) for x, y in _box(X + 0.0001, Y + 0.0001)]
+    assert compare._distance([a], [b]) == 0
+    inner = [compare._proj(X + 0.0001, Y + 0.0001)]
+    assert compare._distance([a], [inner]) == 0

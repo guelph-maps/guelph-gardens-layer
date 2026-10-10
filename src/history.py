@@ -9,9 +9,9 @@ so the chart never shows a false plateau.
 The record is deliberately tiny and reconstructible. OSM keeps its own history,
 so a lost file is rebuilt with ``backfill``, which asks Overpass what OSM
 looked like on each past Monday and re-runs the comparison against it. That is
-why nothing heavier -- the Overpass replies, the per-park verdicts -- is kept.
-The one caveat: a reconstructed week uses today's City polygons, since the City
-side is not archived; the Park Boundary layer changes rarely, and the page
+why nothing heavier -- the Overpass replies, the per-garden verdicts -- is kept.
+The one caveat: a reconstructed week uses today's City roster, since the City
+side is not archived, and the page
 says which points are reconstructed.
 """
 
@@ -25,7 +25,8 @@ from addressvault import net
 
 from src import config
 
-FIELDS = ("missing", "mismatch", "unnamed", "placeholder", "city", "osm_rings")
+FIELDS = ("missing", "point_only", "unnamed", "name_mismatch", "untyped",
+          "matched", "pollinator", "city", "osm")
 
 
 def record(summary, day=None):
@@ -106,14 +107,16 @@ def backfill(since, until, step_days, pause, sleep=time.sleep):
         if data is None:
             print("  no answer; stopping. Run backfill again later to resume.")
             break
-        rings = compare._osm_rings(data)
-        _gaps, counts = compare._match(city, rings)
+        osm = compare._osm_gardens(data)
+        _gaps, counts = compare._match(city, osm)
         row = {"date": d.isoformat(), "osm_date": d.isoformat(), "source": "attic",
-               "city": len(city), "osm_rings": len(rings), **counts}
+               "city": sum(1 for c in city if c["kind"] == "food"),
+               "osm": len(osm), **{k: counts[k] for k in FIELDS if k in counts}}
         _write(load() + [row])
         added += 1
-        print(f"  {counts['missing']:,} missing, {counts['mismatch']:,} mismatch, "
-              f"{counts['unnamed']:,} unnamed, {counts['placeholder']:,} placeholder")
+        print(f"  {counts['missing']:,} missing, {counts['point_only']:,} point-only, "
+              f"{counts['unnamed']:,} unnamed, {counts['name_mismatch']:,} name "
+              f"mismatch, {counts['untyped']:,} untyped")
     return added
 
 

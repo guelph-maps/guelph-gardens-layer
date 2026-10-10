@@ -20,11 +20,7 @@ def build_site():
     """Render index.html, copy assets and screenshots into build/site/."""
     os.makedirs(config.SITE_DIR, exist_ok=True)
 
-    park_count = "120+"
-    if os.path.isfile(config.COUNT_PATH):
-        with open(config.COUNT_PATH, encoding="utf-8") as f:
-            park_count = f"{int(f.read().strip()):,}"
-
+    kinds = _kind_counts()
     build_date = date.today().isoformat()
 
     with open(os.path.join(config.ASSETS_DIR, "index.html.tmpl"),
@@ -42,10 +38,13 @@ def build_site():
             f"{config.PAGES_URL}/tiles/vector/{{zoom}}/{{x}}/{{y}}.pbf"
         ),
         "{{BUILD_DATE}}": build_date,
-        "{{DATA_DATE}}": _data_date(build_date),
-        "{{PARK_COUNT}}": park_count,
+        "{{POINTS_DATE}}": _data_date("points", build_date),
+        "{{POLYGONS_DATE}}": _data_date("polygons", build_date),
+        "{{FOOD_COUNT}}": f"{kinds.get('food', 0):,}",
+        "{{POLLINATOR_COUNT}}": f"{kinds.get('pollinator', 0):,}",
         "{{GITHUB_REPO}}": config.GITHUB_REPO,
-        "{{DATASET_PAGE}}": config.DATASET_PAGE,
+        "{{POINTS_PAGE}}": config.POINTS_PAGE,
+        "{{POLYGONS_PAGE}}": config.POLYGONS_PAGE,
         "{{LICENSE_URL}}": config.LICENSE_URL,
         "{{LICENSE_NOTICE}}": config.LICENSE_NOTICE,
     }
@@ -91,13 +90,18 @@ def _build_gaps_page(build_date):
     replacements = {
         "{{PAGES_URL}}": config.PAGES_URL,
         "{{BUILD_DATE}}": build_date,
-        "{{DATA_DATE}}": _data_date(build_date),
+        "{{POINTS_DATE}}": _data_date("points", build_date),
+        "{{POLYGONS_DATE}}": _data_date("polygons", build_date),
         "{{MISSING_COUNT}}": f"{summary.get('missing', 0):,}",
-        "{{MISMATCH_COUNT}}": f"{summary.get('mismatch', 0):,}",
+        "{{POINT_ONLY_COUNT}}": f"{summary.get('point_only', 0):,}",
+        "{{UNTYPED_COUNT}}": f"{summary.get('untyped', 0):,}",
         "{{UNNAMED_COUNT}}": f"{summary.get('unnamed', 0):,}",
-        "{{PLACEHOLDER_COUNT}}": f"{summary.get('placeholder', 0):,}",
+        "{{NAME_MISMATCH_COUNT}}": f"{summary.get('name_mismatch', 0):,}",
+        "{{MATCHED_COUNT}}": f"{summary.get('matched', 0):,}",
+        "{{POLLINATOR_COUNT}}": f"{summary.get('pollinator', 0):,}",
         "{{CITY_COUNT}}": f"{summary.get('city', 0):,}",
-        "{{OSM_COUNT}}": f"{summary.get('osm_rings', 0):,}",
+        "{{OSM_COUNT}}": f"{summary.get('osm', 0):,}",
+        "{{RADIUS}}": f"{config.MATCH_RADIUS_M}",
         "{{OSM_DATE}}": summary.get("osm_date", build_date),
         "{{OSM_NOTE}}": _osm_note(summary),
         "{{GITHUB_REPO}}": config.GITHUB_REPO,
@@ -108,7 +112,8 @@ def _build_gaps_page(build_date):
         # attached to that, not a footer nicety.
         "{{LICENSE_URL}}": config.LICENSE_URL,
         "{{LICENSE_NOTICE}}": config.LICENSE_NOTICE,
-        "{{DATASET_PAGE}}": config.DATASET_PAGE,
+        "{{POINTS_PAGE}}": config.POINTS_PAGE,
+        "{{POLYGONS_PAGE}}": config.POLYGONS_PAGE,
     }
     for key, value in replacements.items():
         html = html.replace(key, value)
@@ -142,7 +147,7 @@ def _build_history_page(gaps_dir, build_date):
         "{{FIRST_DATE}}": rows[0]["date"] if rows else build_date,
         "{{HISTORY_JSON}}": json.dumps(rows),
         "{{HISTORY_ROWS}}": "\n".join(_history_row(r) for r in reversed(rows)),
-        # Only counts, but counts of the City's polygons, and like the gap page
+        # Only counts, but counts of the City's gardens, and like the gap page
         # this can be the one page a reader opens: it carries the notice too.
         "{{LICENSE_URL}}": config.LICENSE_URL,
         "{{LICENSE_NOTICE}}": config.LICENSE_NOTICE,
@@ -169,7 +174,7 @@ def _osm_note(summary):
 
     The gap list is only worth acting on if both sides are fresh, and the OSM
     side is the one that moves daily. A page dated today whose OSM data is two
-    weeks old sends a mapper to add a park somebody else already added.
+    weeks old sends a mapper to add a garden somebody else already added.
     """
     if not summary.get("osm_stale"):
         return ""
@@ -181,11 +186,26 @@ def _osm_note(summary):
     )
 
 
-def _data_date(fallback):
-    """Return the City data's date (YYYY-MM-DD) from the download sidecar."""
+def _kind_counts():
+    """{"food": n, "pollinator": n} from the slim file."""
+    counts = {}
+    if os.path.isfile(config.SLIM_PATH):
+        with open(config.SLIM_PATH, encoding="utf-8") as f:
+            for line in f:
+                kind = json.loads(line)["properties"]["kind"]
+                counts[kind] = counts.get(kind, 0) + 1
+    return counts
+
+
+def _data_date(key, fallback):
+    """The date (YYYY-MM-DD) a City layer last changed, from the sidecar.
+
+    The two layers are dated apart on purpose: the roster moves, the
+    footprints have not since 2025-06, and a reader should see both.
+    """
     if os.path.isfile(config.LAST_DOWNLOAD_PATH):
         with open(config.LAST_DOWNLOAD_PATH, encoding="utf-8") as f:
-            sidecar = json.load(f)
+            sidecar = json.load(f).get(key) or {}
         match = re.search(r"\d{4}-\d{2}-\d{2}", sidecar.get("filename", ""))
         if match:
             return match.group(0)

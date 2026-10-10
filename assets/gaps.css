@@ -34,9 +34,11 @@ body.app { margin: 0; display: flex; flex-direction: column; }
 .count strong { font-size: 1.15rem; margin-right: .35rem; }
 .count span { color: var(--muted); font-size: .82rem; }
 .count.missing { border-left: 4px solid #7048e8; }
-.count.mismatch { border-left: 4px solid #1c7ed6; }
+.count.point_only { border-left: 4px solid #c2255c; }
+.count.untyped { border-left: 4px solid #0c8599; }
 .count.unnamed { border-left: 4px solid #e8590c; }
-.count.placeholder { border-left: 4px solid #868e96; }
+.count.name_mismatch { border-left: 4px solid #1c7ed6; }
+.count.pollinator { border-left: 4px solid #e69100; }
 .count.meta-count {
   display: flex;
   align-items: center;
@@ -99,12 +101,16 @@ body.app { margin: 0; display: flex; flex-direction: column; }
   border-radius: 4px;
 }
 .hint { margin: .6rem 0 0; color: var(--muted); font-size: .82rem; line-height: 1.45; }
+details.hint summary { cursor: pointer; color: var(--ink, #222); font-weight: 600; }
+details.hint p { margin: .45rem 0 0; }
 
 .swatch { display: inline-block; width: .9rem; height: .9rem; border-radius: 50%; }
 .swatch.missing { background: #7048e8; }
-.swatch.mismatch { background: #1c7ed6; }
+.swatch.point_only { background: #c2255c; }
+.swatch.untyped { background: #0c8599; }
 .swatch.unnamed { background: #e8590c; }
-.swatch.placeholder { background: #868e96; }
+.swatch.name_mismatch { background: #1c7ed6; }
+.swatch.pollinator { background: #e69100; }
 
 /* --- data table --- */
 #gap-table { font-size: .9rem; }
@@ -121,9 +127,12 @@ body.app { margin: 0; display: flex; flex-direction: column; }
 #gap-table tbody tr:hover { background: #f0f8f3; }
 #gap-table tbody tr.selected { background: #e6f4ec; }
 #gap-table .status-missing { color: #5f3dc4; font-weight: 600; }
-#gap-table .status-mismatch { color: #1864ab; font-weight: 600; }
+#gap-table .status-point_only { color: #a61e4d; font-weight: 600; }
+#gap-table .status-untyped { color: #0b7285; font-weight: 600; }
 #gap-table .status-unnamed { color: #c2410c; font-weight: 600; }
-#gap-table .status-placeholder { color: #666; font-weight: 600; }
+#gap-table .status-name_mismatch { color: #1864ab; font-weight: 600; }
+#gap-table .status-pollinator { color: #a35f00; font-weight: 600; }
+#gap-table .osm-tag { display: block; color: var(--muted, #666); font-size: .8em; }
 #gap-table .osm-blank { color: var(--muted); }
 #gap-table .osm-name { display: block; color: var(--muted); font-size: .85em; }
 #gap-table .osm-links { white-space: nowrap; }
