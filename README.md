@@ -1,105 +1,138 @@
-# Guelph Parks Layer
+# Guelph Community Gardens Layer
 
-Turns the City of Guelph [Park Boundary](https://gismaps.guelph.ca/hosting/rest/services/OpenData/OpenData1/FeatureServer/5)
-layer (126 park polygons) into map-tile layers that OpenStreetMap mappers can
-add to the **JOSM** and **iD** editors as a reference overlay.
+Turns the City of Guelph's two community-garden layers &mdash; the
+[Community Gardens](https://gismaps.guelph.ca/hosting/rest/services/OpenData/OpenData1/FeatureServer/18)
+roster (points) and the
+[Community Gardens Polygons](https://gismaps.guelph.ca/hosting/rest/services/OpenData/OpenData1/FeatureServer/28)
+footprints &mdash; into map-tile layers that OpenStreetMap mappers can add to
+the **JOSM** and **iD** editors as a reference overlay, plus a weekly page of
+the gardens OSM does not have yet.
 
-**Live layer and how to add it: https://guelph-maps.github.io/guelph-parks-layer/**
+**Live layer and how to add it: https://guelph-maps.github.io/guelph-gardens-layer/**
+&middot; **Gap page: https://guelph-maps.github.io/guelph-gardens-layer/gaps/**
 
-Part of the [guelph-maps](https://github.com/guelph-maps) organisation, which
-indexes every Guelph project. Its sibling layer is
-[guelph-address-layer](https://github.com/guelph-maps/guelph-address-layer)
-([live](https://guelph-maps.github.io/guelph-address-layer/)): the City's
-address points, rendered as house-number labels, from the same organisation.
-
-It is a sibling of
-[toronto-parks-layer](https://github.com/skfd/toronto-parks-layer), which is the
-template this was cloned from: the same `download -> slim -> compare -> vector
--> raster -> site -> publish` pipeline, pointed at Guelph's park boundaries.
-A person who knows one project knows the other; the only step that differs in
-substance is `download`, because Guelph publishes an ArcGIS FeatureServer where
-Toronto publishes a static file on CKAN.
+Part of the [guelph-maps](https://github.com/guelph-maps) organisation. It is a
+clone of [guelph-parks-layer](https://github.com/guelph-maps/guelph-parks-layer):
+the same `download -> slim -> compare -> vector -> raster -> site -> publish`
+pipeline. What differs is that there are two sources, and `slim` joins them.
 
 The audit behind it is
 [`guelph-osm-import-audit`](https://github.com/guelph-maps/guelph-osm-import-audit)
-(private), `findings/parks-recreation.md`,
-which tiered this layer **4 / conflate**: OSM already has the parks, what the
-City has that OSM lacks is the **official current names** — including the
-Anishinaabemowin renaming *Mkinaak Donjibaa Park* — plus a handful of genuinely
-absent polygons. That is a gap page, not an import.
-[guelph-pitches-beholder](https://github.com/guelph-maps/guelph-pitches-beholder)
-tracks the courts and sports fields inside these same parks against OSM —
-the same audit finding, tiered 4 / conflate.
+(private), whose 2026-10-09 recalibration (`findings/recalibration.md`,
+"Community gardens") rated it **4 / conflate**: 22 of the City's 40 in-use
+garden footprints had no OSM garden within 25 m, and OSM's side was already
+being closed by hand &mdash; eight community gardens added or retagged between
+2026-06-25 and 09-30. A page is the tool for that.
+
+## First run (2026-10-09, OSM base 2026-10-10 00:03Z)
+
+| | |
+|---|--:|
+| City food-growing gardens on the roster | **43** (40 with a footprint, 3 without) |
+| &nbsp;&nbsp;matched cleanly in OSM | 10 |
+| &nbsp;&nbsp;`missing` &mdash; no OSM garden near the footprint | **23** |
+| &nbsp;&nbsp;`point_only` &mdash; no footprint, no OSM garden near the point | 3 |
+| &nbsp;&nbsp;`untyped` &mdash; matched to a bare `leisure=garden` | 1 |
+| &nbsp;&nbsp;`unnamed` &mdash; matched, OSM garden has no name | 3 |
+| &nbsp;&nbsp;`name_mismatch` &mdash; matched, OSM has another name | 3 |
+| pollinator patches (shown, not counted) | 27 (2 with an OSM garden near) |
+| OSM gardens in the bbox | 74 |
+
+That reproduces the recalibration. Its 22 missing footprints become 23 because
+matching is one-to-one (below): West Village Co-op Youth Farm loses the OSM
+garden it shared with Parkwood, which was one of its "4 named differently".
+Its 3 unnamed are the same three (Centennial CVI, Eramosa River Park food
+forest, f.u.n. Commons / The Seed), and its 1 untyped is Guelph Community Food
+Forest.
 
 ## What it produces
 
-- **Vector tiles** (MVT) &mdash; interactive in iD; click a polygon to read its
-  `name`, `address` and `objectid` tags.
-- **Raster tiles** (PNG) &mdash; translucent green fills with park-name labels;
-  each park's outline and label share a stable hashed colour so a name
-  overhanging a small polygon is still visually tied to it. A readable backdrop
-  for JOSM. A name only renders once the polygon is a visible shape on screen,
-  so big parks are labelled from city zoom and small parkettes only when zoomed
-  in; at the top raster zoom every named park is labelled.
-- A **landing page** with copy-paste "add this layer" instructions for both
-  editors.
-- A **gap-review page** ([`/gaps/`](https://guelph-maps.github.io/guelph-parks-layer/gaps/))
-  that compares the City polygons against park areas already in OpenStreetMap
-  and lists the gaps &mdash; City parks with no overlapping OSM area
-  ("missing"), matched parks whose OSM name differs ("mismatch"), and matched
-  parks whose OSM area carries no name at all ("unnamed") &mdash; on an
-  interactive map and a filterable table. OSM areas are pulled from Overpass;
-  matching is by spatial overlap (see [`src/compare.py`](src/compare.py)). Its
-  [history page](https://guelph-maps.github.io/guelph-parks-layer/gaps/history.html)
-  charts those counts over time, one point per weekly run.
+- **Vector tiles** (MVT, layer `gardens`, z12&ndash;19) &mdash; one feature per
+  in-use roster garden: its footprint polygon, or its roster point when the
+  City has drawn none. Tags: `name`, `city_name`, `type`, `kind`
+  (`food`/`pollinator`), `address`, `footprint` (`polygon`/`point`),
+  `garden_id`, `objectid`.
+- **Raster tiles** (PNG, z13&ndash;17) &mdash; footprints in translucent green
+  with a dark outline, a green dot for every food garden too small to see as a
+  shape (or with no shape), an amber dot for every pollinator patch, and names
+  from z15 (pollinator names only at z17).
+- A **landing page** with copy-paste "add this layer" instructions.
+- A **gap-review page** ([`/gaps/`](https://guelph-maps.github.io/guelph-gardens-layer/gaps/))
+  with a map, a filterable table and OSM / iD links per garden, and a
+  [history page](https://guelph-maps.github.io/guelph-gardens-layer/gaps/history.html)
+  charting the counts over time, one point per weekly run.
 
 All of it is published to GitHub Pages and rebuilt weekly.
 
-## What is kept
+## The two sources, and which one is the authority
 
-**Every park the City publishes as in use.** Toronto's slim step filters on
-`AREA_CLASS`, because its Green Spaces dataset mixes traffic islands, road
-slivers, boulevards and hydro corridors in with the parks. Guelph's layer has
-no class field, and does not need one: it is parks and nothing else. The
-analogous categorical filter here is **`ParkStatus`** (`INCLUDE_PARK_STATUS` in
-[`src/config.py`](src/config.py)), which keeps `IN-USE` and drops anything
-retired, proposed or planned.
+The recalibration's key finding was that **the layer choice flips for a
+watcher**. The audit preferred the polygons for an import. But the polygons
+have been frozen since 2025-06; the points are the live roster &mdash; two new
+gardens on 2026-06-11, edits through 2026-07. So:
 
-Be clear about what that rule does today: **nothing**. All 126 rows are
-`IN-USE`; the City removes a closed park from the extract rather than flagging
-it, so the field currently carries no information at all. The rule is written
-down anyway, because the day a `RETIRED` or `PROPOSED` value does appear, the
-alternative is an overlay telling mappers to add a park that has been
-decommissioned or not yet built.
+- **The roster (points) decides which gardens exist and what they are called.**
+  71 rows: 43 food-growing in use (traditional, communal, food forest), 27
+  pollinator patches, 1 `FUTURE` food forest with no name, which is dropped.
+- **A footprint (polygon) only lends a garden its shape**, joined on
+  `CommGardenID` and nothing else. Only `IN-USE` footprints join. Two of the
+  newest roster rows (Courtney/Goines/Mallott Park, Exhibition Park) carry no
+  id, and so do the footprint layer's two `FUTURE` polygons; joining on a
+  missing key would draw a planned garden's outline around a built one, so a
+  missing id never joins. Golfview Garden Guild (id 41) has no in-use footprint
+  either: its outline is in the layer as a `FUTURE` "Golfview Community
+  Garden". These three are drawn as dots and their status is `point_only`.
+- A name join would be no better: footprint 22 still says *THE SEED YOUTH FARM
+  - FOOD FROM HOME = FOOD FOR HOME (FFH) PROJECT* where the roster now says
+  *f.u.n. Commons Westmount Garden*. The roster's name wins.
 
-**Names come from `Name`, not `ParkName`.** This is the one trap in the
-dataset, and the obvious field is the wrong one. `ParkName` is ALL CAPS
-(`LEWIS FARM PARK`); `Name` (service alias "Name of Facility") is the same name
-already cased for OSM (`Lewis Farm Park`). So, unlike the Toronto sibling,
-there is **no title-casing step here** — see `NAME_KEY` in
-[`src/config.py`](src/config.py).
+Names on both layers are ALL CAPS. `name` is title-cased for the map, with a
+handful of fixes (`CVI`, `GCVI`, `FFH`, `Co-op`, `McCrae`); `city_name` keeps
+the City's text verbatim. A name someone typed in mixed case is left as it is.
+Mappers should take the name from the sign.
 
-The City's own casing is not perfect, and a mapper should not copy it blindly:
-`O'connor Lane Park`, `I.o.d.e. Fountain`, `W.e. Hamilton Park`,
-`John Mccrae Memorial Gardens`, `Macalister Park`,
-`Priory Park (blacksmith Fntn)`. These are shown as the City publishes them —
-the layer is a reference, and inventing a correction would be a worse lie than
-showing the wart.
+**Treat the outline as a hint.** Many footprints are a single bed &mdash; the
+median is 233 m&sup2;, the smallest 34 m&sup2; &mdash; drawn in 2025 or
+earlier. Both pages tell mappers to map what is on the ground, usually
+`leisure=garden` + `garden:type=community` around the whole plot area.
 
-The single polygon named `Unnamed Neighbourhood Park` is kept out of the
-rendered tile layer (that is a placeholder, not a name, and an overlay that
-draws it invites someone to type it into OSM). The slim step writes it to
-`parks-slim.geojsonl` but not to `parks-layer.geojsonl`, so the gap-review page
-still tracks it under its own `placeholder` category while the tiles do not.
-This is the exact role Toronto's numbered `TRCA LANDS (  n)` parcels play there.
+## Matching (`src/compare.py`)
 
-One caution the audit raised and this layer cannot settle: the City's polygon
-is the **parcel it owns**, which routinely includes a road allowance, a
-stormwater block or a walkway easement nobody would call part of the park.
-OSM's existing polygons were traced from imagery and follow the visible edge.
-Where the two disagree, OSM's is often the better `leisure=park`. Use this
-layer for names and for finding absent parks; do not replace geometry from it
-without overlaying a sample first.
+OSM candidates are every `leisure=garden`, `landuse=allotments` and
+`landuse=orchard` node, closed way and multipolygon in the Guelph bbox (four of
+Guelph's community gardens are mapped as a node). A City garden is matched when
+a candidate lies within **25 m** of its footprint's edge &mdash; or of its
+roster point when it has no footprint. The recalibration found the same 22
+unmatched footprints at 10, 25, 50 and 100 m, so the radius is not what the
+count hangs on.
+
+Matching is **one-to-one**. Parkwood Community Garden and West Village Co-op
+Youth Farm sit side by side at 170 Stephanie Drive, and both are within reach
+of OSM way 1136007863, *Stephanie Drive Community Garden*. One OSM garden
+cannot stand for two of the City's, so every garden/OSM pair in range is
+ranked &mdash; a name that agrees first, then an OSM garden tagged
+`garden:type=community` (or allotments/orchard), then the nearer &mdash; and
+taken greedily while both sides are free. Pollinator patches are paired
+afterwards, against what the food gardens left.
+
+Names agree when they are equal after dropping *community, communal,
+garden(s), vegetable, the, project* and punctuation, or one contains the other
+(the recalibration's rule). Each food garden gets one status:
+
+| status | meaning |
+|---|---|
+| `missing` | no OSM garden within 25 m of its footprint |
+| `point_only` | no footprint, and no OSM garden within 25 m of its roster point |
+| `untyped` | matched to a `leisure=garden` with no `garden:type=community` &mdash; checked first, as the weakest match |
+| `unnamed` | matched, but the OSM garden has no `name` |
+| `name_mismatch` | matched, but the OSM name is another name |
+
+**Pollinator patches** (27 roster rows) are on the layer and on the gap page,
+off by default, and **never counted**: OSM has no settled tag for a pollinator
+garden, and a page that counted them would be asking mappers to invent one.
+
+The geometry is pure Python in a local equirectangular projection &mdash; 70
+gardens against 74 OSM features needs nothing heavier.
 
 ## Setup
 
@@ -113,9 +146,9 @@ without overlaying a sample first.
 ## Usage
 
 ```
-python run.py download   # fetch the latest Park Boundary GeoJSON (smart-cached)
-python run.py slim       # filter to in-use parks -> slim GeoJSONL
-python run.py compare    # diff City polygons against OSM -> data/gaps.geojson
+python run.py download   # fetch the roster and the footprints (smart-cached)
+python run.py slim       # join roster to footprints -> slim GeoJSONL
+python run.py compare    # diff City gardens against OSM -> data/gaps.geojson
 python run.py backfill   # one-off: reconstruct past weeks' gap counts from OSM history
 python run.py vector     # build vector (MVT) tiles via WSL tippecanoe
 python run.py raster     # build labelled raster (PNG) tiles
@@ -128,69 +161,51 @@ python run.py update     # build + publish  (the scheduled entry point)
 
 Build output lands in `build/site/`; that directory is what gets published.
 
-## The source, and why `download` is the only rewritten step
+## Download
 
-Toronto downloads one static GeoJSON from a CKAN package and smart-caches it on
-a HEAD request: `Last-Modified` plus `Content-Length` against a small JSON
-sidecar. Guelph publishes an **ArcGIS FeatureServer**, and a `/query` response
-has neither of those to offer — it is generated the moment you ask, so its
-`Last-Modified` is the time of your own request.
+Each layer is an ArcGIS `/query` with `outSR=4326` (the service stores
+EPSG:26917). A `/query` response has no meaningful `Last-Modified`, so each
+body is hashed and an unchanged hash keeps the existing dated file
+(`data/gardens-points-DATE.geojson`, `data/gardens-polygons-DATE.geojson`).
+The two are dated apart on purpose and both dates are printed on the pages:
+the roster moves, the footprints do not.
 
-So the cache key changes and nothing else does. The query is
-
-```
-.../FeatureServer/5/query?where=1%3D1&outFields=*&outSR=4326&f=geojson
-```
-
-`outSR=4326` is not optional: the service stores geometry in EPSG:26917 (UTM
-17N, metres), and without it every downstream coordinate is nonsense. The body
-is ~330 KB, cheap enough to fetch every time, and what is compared is a
-**sha256 of the response**. An identical hash means the City has not touched the
-layer and the existing dated file is kept — which also keeps the site's "City
-data" date meaning *when the data last changed*, exactly as Toronto's
-`Last-Modified` filename does.
-
-The output contract is unchanged: one dated GeoJSON FeatureCollection in
-`data/`, which is all `slim` and everything after it knows about.
-
-Two ArcGIS-specific checks sit on the response, because this service answers
-with HTTP 200 whatever it thinks of your request: a body carrying an `error`
-object is refused, and so is one with `exceededTransferLimit` set. The layer's
-`maxRecordCount` is 100,000 against 126 rows, so a truncated page cannot happen
-today — but a partial extract would report the parks that fell off the end as
-missing from OSM, and that is worth stopping the run for rather than quietly
-paginating around.
+Both layers are fetched and checked before either is written, so a failure
+halfway never leaves a new roster beside last week's footprints. A body
+carrying an ArcGIS `error` object (the service says so with HTTP 200) or
+`exceededTransferLimit` is refused; `maxRecordCount` is 100,000 against ~70
+rows.
 
 ## Tile endpoints
 
 ```
-https://guelph-maps.github.io/guelph-parks-layer/tiles/vector/{z}/{x}/{y}.pbf   (z10-19)
-https://guelph-maps.github.io/guelph-parks-layer/tiles/raster/{z}/{x}/{y}.png   (z13-17)
+https://guelph-maps.github.io/guelph-gardens-layer/tiles/vector/{z}/{x}/{y}.pbf   (z12-19)
+https://guelph-maps.github.io/guelph-gardens-layer/tiles/raster/{z}/{x}/{y}.png   (z13-17)
 ```
 
-The vector layer name is `parks`.
+The vector layer name is `gardens`. tippecanoe runs with `-r1
+--no-tiny-polygon-reduction`: seventy small features are kept whole at every
+zoom.
 
 ## Hosting
 
 The tile pyramid is published to an orphan `gh-pages` branch, recreated and
-force-pushed on every build so repository history never grows. One-time step:
-in the GitHub repo, set **Settings &rarr; Pages &rarr; Source** to the
-`gh-pages` branch (root).
+force-pushed on every build so repository history never grows.
 
 ## Scheduling (Windows)
 
 Run as Administrator:
 
 ```powershell
-.\schedule-add.ps1      # registers a weekly task "kk-GuelphParksLayer", Tuesdays 16:30
+.\schedule-add.ps1      # registers a weekly task "kk-GuelphGardensLayer", Tuesdays 19:30
 .\schedule-remove.ps1   # unregisters it
 ```
 
-Weekly is enough &mdash; 126 park polygons change rarely, and the City's service
-carries no edit date to poll anyway; it is the gap page, which diffs against
-live OSM, that moves week to week. Tuesday keeps this clear of
-`toronto-parks-layer`'s Monday slot, so the two never drive tippecanoe in the
-same WSL instance at once.
+Weekly is enough &mdash; the roster gains a garden or two a year; it is the gap
+page, which diffs against live OSM, that moves week to week. Tuesday 19:30 is
+clear of every other layer's slot (16:30 is taken Monday to Sunday, and Monday
+19:30 is the water layer), so no two drive tippecanoe in the same WSL instance
+at once.
 
 ### The link gate
 
@@ -205,8 +220,8 @@ kill a long wait anyway.
 ### Gap history
 
 Every live comparison appends one line to `data/history.jsonl` -- the date, the
-OSM data date, and the missing / mismatch / unnamed / placeholder counts -- and
-the site step charts it at [`/gaps/history.html`](https://guelph-maps.github.io/guelph-parks-layer/gaps/history.html),
+OSM data date, and the counts per status -- and
+the site step charts it at [`/gaps/history.html`](https://guelph-maps.github.io/guelph-gardens-layer/gaps/history.html),
 with the rows published beside it as `gaps/history.jsonl`. That is the whole
 record the observer keeps: the tiles and the gap list are rebuilt from scratch
 and force-pushed each week, but this file only grows, so the scheduled
@@ -223,13 +238,13 @@ marked `attic`. It is paced -- one attempt per date, 30 s between dates, and
 it stops at the first unanswered query -- because attic queries cost the
 instance more than live ones and this is a one-off, not the weekly build. Dates
 already on record are skipped, so an interrupted run resumes when re-run.
-The default range starts 2026-06-01, the same Monday the Toronto sibling's
+The default range starts 2026-06-01, the same Monday the parks sibling's
 chart starts on; `--since`, `--until`, `--every` and `--pause` adjust it.
 
 Two caveats the page states: a reconstructed week is compared against
-*today's* City polygons (the City side is not archived; the Park Boundary layer
-changes rarely), and the counts follow the City layer, so they move when the
-City adds or renames parks, not only when someone maps one.
+*today's* City roster (the City side is not archived), and the counts follow
+the roster, so they move when the City adds or retires a garden, not only when
+someone maps one.
 
 A checkout without `data/history.jsonl` (a fresh clone, a wiped `data/`) seeds
 itself from the published `gaps/history.jsonl` before recording, so the record
@@ -243,8 +258,8 @@ tried, and the whole list is retried `OVERPASS_ROUNDS` times a minute apart,
 because what is being worked around is a loaded instance shedding one request.
 A reply with fewer than `OSM_MIN_ELEMENTS` elements is refused however healthy
 its status code: a regional instance answers an out-of-region bbox with a
-valid, empty result, which taken at face value would report all 126 City parks
-as missing from OSM.
+valid, empty result, which taken at face value would report every City garden
+as missing from OSM. The floor (35) is half the first live reply's 74.
 
 `overpass.kumi.systems` is deliberately **not** in the list. It returned 504s
 through August 2026 and has since been caught serving months-stale data, which
@@ -252,7 +267,11 @@ is the worse of the two failures because it looks exactly like success.
 `overpass.private.coffee` was dropped on 2026-09-29 for the same failure: the
 Toronto sibling caught it serving OSM from May and July on consecutive days.
 That leaves `overpass-api.de` alone, and a reply from any mirror whose data is
-more than `OSM_MAX_AGE_DAYS` (3) old is refused like a 504.
+more than `OSM_MAX_AGE_DAYS` (3) old is refused like a 504 &mdash; and so is a
+reply that carries no `timestamp_osm_base` at all, since it cannot be shown to
+be fresh (the parks template dated such a reply "today"). Overpass also sends
+a runtime error as an HTML page with a 200; that fails to parse and counts as
+no answer. The first query this project ever sent got exactly that.
 
 The page prints the **OSM database timestamp the mirror declares about its own
 reply** (`osm3s.timestamp_osm_base`), not the date of the build — a mirror can
@@ -266,25 +285,23 @@ tiles still ship and the task's restart-on-failure tries the fetch again in half
 an hour instead of in a week. Being offline is told apart from an Overpass
 outage and stays a 75.
 
+
 ## Tests
 
 ```
-python tests\test_tilemath.py
-python tests\test_slim.py
-pytest                       # the above, plus the download / compare / publish tests
+pytest
 ```
 
 ## Licence / attribution
 
-Park data is &copy; City of Guelph, published under the
+Garden data is &copy; City of Guelph, published under the
 [Open Government Licence &ndash; City of Guelph](https://gismaps.guelph.ca/Images/OpenDataLicenceVersion2.pdf).
 The OSMF Licence Working Group approved that licence as `compatible` on
 2024-09-09.
 
-**This project redistributes City data** — as published tiles on a public URL —
-which the sibling *beholder* products never do, and the licence attaches a
-required attribution to that. Both the landing page and the gap page carry,
-visibly:
+**This project redistributes City data** &mdash; as published tiles on a public
+URL &mdash; and the licence attaches a required attribution to that. The
+landing page, the gap page and the history page each carry, visibly:
 
 > Contains information licensed under the Open Government Licence – City of Guelph.
 
