@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guelph Community Gardens &mdash; OSM Coverage Gaps</title>
+<link rel="stylesheet" href="../index.css">
+<link rel="stylesheet" href="gaps.css">
+<link rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin="">
+<script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+        crossorigin=""></script>
+<script defer src="gaps.js"></script>
+</head>
+<body class="app">
+
+<header class="bar">
+  <div class="bar-head">
+    <h1>Guelph Community Gardens &mdash; OSM coverage gaps</h1>
+    <a class="back" href="../">&larr; reference layer</a>
+    <a class="back" href="history.html">gaps over time &rarr;</a>
+  </div>
+  <div class="counts">
+    <div class="count missing"><strong>23</strong><span>missing in OSM</span></div>
+    <div class="count point_only"><strong>3</strong><span>no City footprint, not in OSM</span></div>
+    <div class="count untyped"><strong>1</strong><span>OSM garden untyped</span></div>
+    <div class="count unnamed"><strong>3</strong><span>OSM garden unnamed</span></div>
+    <div class="count name_mismatch"><strong>3</strong><span>name mismatches</span></div>
+    <div class="count"><strong>10</strong><span>matched cleanly</span></div>
+    <div class="count"><strong>43</strong><span>City food gardens</span></div>
+    <div class="count pollinator"><strong>27</strong><span>pollinator patches (not counted)</span></div>
+    <div class="count"><strong>74</strong><span>OSM gardens</span></div>
+    <div class="count meta-count">City roster 2026-10-09 &middot; footprints 2026-10-09 &middot; OSM data 2026-10-13 23:28Z &middot; compared 2026-10-13</div>
+  </div>
+  
+  <p class="licence">
+    <a href="https://gismaps.guelph.ca/Images/OpenDataLicenceVersion2.pdf">Contains information licensed under the Open Government Licence – City of Guelph.</a>
+    Sources: <a href="https://gismaps.guelph.ca/hosting/rest/services/OpenData/OpenData1/FeatureServer/18">Community Gardens</a> (the roster) and
+    <a href="https://gismaps.guelph.ca/hosting/rest/services/OpenData/OpenData1/FeatureServer/28">Community Gardens Polygons</a> (footprints).
+  </p>
+</header>
+
+<div class="layout">
+  <div id="gap-map"
+       data-geojson="gaps.geojson"
+       data-raster="../tiles/raster/{z}/{x}/{y}.png"></div>
+
+  <aside class="panel">
+    <div class="panel-head">
+      <div class="controls">
+        <label><span class="swatch missing"></span>
+          <input type="checkbox" id="show-missing" checked> Missing</label>
+        <label><span class="swatch point_only"></span>
+          <input type="checkbox" id="show-point_only" checked> Point only</label>
+        <label><span class="swatch untyped"></span>
+          <input type="checkbox" id="show-untyped" checked> Untyped</label>
+        <label><span class="swatch unnamed"></span>
+          <input type="checkbox" id="show-unnamed" checked> Unnamed</label>
+        <label><span class="swatch name_mismatch"></span>
+          <input type="checkbox" id="show-name_mismatch" checked> Name mismatch</label>
+        <label><span class="swatch pollinator"></span>
+          <input type="checkbox" id="show-pollinator"> Pollinator</label>
+        <input type="search" id="filter" placeholder="Filter by name...">
+      </div>
+      <details class="hint">
+        <summary>How to read this, and what to map</summary>
+        <p>
+          Green shapes and dots are the City's gardens (raster layer); coloured
+          dots flag the gaps. Click a row to outline it on the map, then press
+          <kbd>O</kbd> to open it on openstreetmap.org or <kbd>I</kbd> in the iD
+          editor.
+        </p>
+        <p>
+          <strong>Treat the City's outline as a hint, not a trace.</strong> Many
+          footprints are a single bed &mdash; the median is about 230&nbsp;m&sup2;
+          &mdash; and the layer has not been redrawn since mid-2025. Map what is on
+          the ground or in current imagery: usually <code>leisure=garden</code> +
+          <code>garden:type=community</code> around the whole plot area, with the
+          name on the sign.
+        </p>
+        <p>
+          A garden counts as mapped when any OSM <code>leisure=garden</code>,
+          <code>landuse=allotments</code> or <code>landuse=orchard</code> lies
+          within 25&nbsp;m of its outline (or of its roster point when the
+          City has drawn no outline). Each OSM garden is matched to at most one
+          City garden, so two City gardens side by side need two OSM gardens.
+          <strong>Missing</strong>: nothing near the outline.
+          <strong>Point only</strong>: nothing near, and the City has no outline
+          either &mdash; the newest gardens; find them on the ground.
+          <strong>Untyped</strong>: matched to a plain <code>leisure=garden</code>;
+          check it is the community garden, then add
+          <code>garden:type=community</code>.
+          <strong>Unnamed</strong> / <strong>name mismatch</strong>: the OSM garden
+          has no name, or another one.
+        </p>
+        <p>
+          Names are the City's ALL CAPS roster names, title-cased here; check the
+          sign before copying one. <strong>Pollinator</strong> patches are on the
+          City's roster too, but OpenStreetMap has no settled tag for a pollinator
+          garden, so they are listed (off by default) and never counted as gaps.
+        </p>
+      </details>
+    </div>
+    <div class="table-scroll">
+      <table id="gap-table">
+        <thead>
+          <tr><th class="col-name">Garden (City roster)</th><th>Address</th>
+              <th>Status</th><th>OSM &middot; iD</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </aside>
+</div>
+
+</body>
+</html>
