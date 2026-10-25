@@ -58,7 +58,8 @@ Forest.
   from z15 (pollinator names only at z17).
 - A **landing page** with copy-paste "add this layer" instructions.
 - A **gap-review page** ([`/gaps/`](https://guelph-maps.github.io/guelph-gardens-layer/gaps/))
-  with a map, a filterable table and OSM / iD links per garden, and a
+  with a map, a filterable table and OSM / iD / JOSM links per garden (the
+  JOSM link needs JOSM running with Preferences → Remote Control enabled), and a
   [history page](https://guelph-maps.github.io/guelph-gardens-layer/gaps/history.html)
   charting the counts over time, one point per weekly run.
 
