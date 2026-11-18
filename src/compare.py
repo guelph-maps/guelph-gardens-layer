@@ -31,14 +31,13 @@ Geometry is pure Python in a local metric projection -- at ~70 gardens against
 
 import json
 import math
-import os
 import re
 import time
-from datetime import date, datetime, timedelta, timezone
-from urllib.parse import urlsplit
 
 import requests
-from addressvault import net
+from layerkit import overpass
+# Raised by overpass.load_osm; callers and tests name it as compare's.
+from layerkit.overpass import OsmUnavailable  # noqa: F401
 
 from src import config, history
 
@@ -101,149 +100,52 @@ def _overpass_query(at=None):
     return settings + ";\n(\n" + "\n".join(parts) + "\n);\nout geom;"
 
 
-class OsmUnavailable(Exception):
-    """Every mirror refused, on a machine that has a working link."""
-
-
 def _load_osm():
     """Return (data, osm_date, from_cache) for OSM gardens.
 
-    Every mirror is tried, and the whole list is retried: the thing being worked
-    around is a loaded instance shedding one request, which clears in seconds.
-    Falling back to the cache still beats no gap page, but it is reported --
-    ``from_cache`` reaches the published page, and the run exits non-zero so the
-    scheduler retries it.
+    The fetch -- every mirror, the list retried, then the cache -- is
+    layerkit.overpass.load_osm; the reasons for each rule are written there.
     """
-    query = _overpass_query()
-    print("Querying Overpass for OSM gardens ...")
-    for attempt in range(config.OVERPASS_ROUNDS):
-        if attempt:
-            print(f"  no mirror answered; retrying the list in "
-                  f"{config.OVERPASS_ROUND_WAIT}s "
-                  f"({attempt + 1} of {config.OVERPASS_ROUNDS})")
-            time.sleep(config.OVERPASS_ROUND_WAIT)
-        for url in config.OVERPASS_URLS:
-            data = _try_overpass(url, query)
-            if data is None:
-                continue
-            with open(config.OSM_CACHE_PATH, "w", encoding="utf-8") as f:
-                json.dump(data, f)
-            osm_base = _osm_base(data)
-            _save_fetch(date.today().isoformat(), url, osm_base, data)
-            return data, osm_base, False
-
-    # Nothing answered. No link is not a failed build; a healthy link and no
-    # mirror is a real outage worth retrying.
-    cached = _load_cache()
-    try:
-        net.wait_for_link(wait=False)
-    except net.LinkUnavailable as e:
-        print(f"Warning: no usable link ({e}); Overpass was never reachable.")
-        if cached:
-            return (*cached, True)
-        raise
-
-    if cached:
-        print(f"Warning: no Overpass mirror answered in "
-              f"{config.OVERPASS_ROUNDS} rounds; falling back to OSM data "
-              f"from {cached[1]}.")
-        return (*cached, True)
-    raise OsmUnavailable(
-        f"no Overpass mirror answered in {config.OVERPASS_ROUNDS} rounds "
-        f"and there is no cached OSM data"
-    )
+    return overpass.load_osm(
+        _overpass_query(), what="gardens",
+        urls=config.OVERPASS_URLS, rounds=config.OVERPASS_ROUNDS,
+        round_wait=config.OVERPASS_ROUND_WAIT,
+        cache_path=config.OSM_CACHE_PATH, fetch_path=config.OSM_FETCH_PATH,
+        try_one=_try_overpass, undated=None)
 
 
 def _try_overpass(url, query):
     """One attempt at one mirror; None if it failed or answered implausibly."""
-    host = urlsplit(url).netloc
-    started = time.time()
-    try:
-        resp = requests.post(
-            url,
-            data={"data": query},
-            headers={"User-Agent": config.USER_AGENT},
-            timeout=config.OVERPASS_TIMEOUT,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    except (requests.RequestException, ValueError) as e:
-        # Overpass sends a runtime error as an HTML page, which lands here as a
-        # ValueError -- the first live query of this project got exactly that.
-        print(f"  {host}: {type(e).__name__}: {str(e).splitlines()[0][:120]}")
-        return None
-
-    count = len(data.get("elements", []))
-    if count < config.OSM_MIN_ELEMENTS:
-        # HTTP 200 is not proof of an answer. A regional instance replies to an
-        # out-of-region bbox with a valid, empty element list.
-        print(f"  {host}: {count:,} elements, under the "
-              f"{config.OSM_MIN_ELEMENTS:,} floor -- ignoring this reply")
-        return None
-    base = _osm_base_time(data)
-    if base is None:
-        # A reply that does not say how current it is cannot be dated, and the
-        # page would otherwise print today beside it.
-        print(f"  {host}: no timestamp_osm_base in the reply -- ignoring it")
-        return None
-    if datetime.now(timezone.utc) - base > timedelta(days=config.OSM_MAX_AGE_DAYS):
-        # A lagging mirror answers the query in full from data months old.
-        print(f"  {host}: OSM data from {_osm_base(data)}, older than "
-              f"{config.OSM_MAX_AGE_DAYS} days -- ignoring this reply")
-        return None
-    print(f"  {host}: {count:,} elements in {time.time() - started:.0f}s, "
-          f"OSM base {_osm_base(data)}")
-    return data
+    return overpass.try_overpass(
+        url, query, user_agent=config.USER_AGENT,
+        timeout=config.OVERPASS_TIMEOUT,
+        min_elements=config.OSM_MIN_ELEMENTS,
+        max_age_days=config.OSM_MAX_AGE_DAYS)
 
 
 def _load_cache():
     """(data, osm_date) for the cached Overpass reply, or None."""
-    if not os.path.isfile(config.OSM_CACHE_PATH):
-        return None
-    with open(config.OSM_CACHE_PATH, encoding="utf-8") as f:
-        data = json.load(f)
-    return data, _cache_date()
+    return overpass.load_cache(config.OSM_CACHE_PATH, config.OSM_FETCH_PATH)
 
 
 def _osm_base(data):
-    """The OSM database timestamp the mirror declares about its own reply,
-    trimmed to the minute -- the honest date for the page, not "today"."""
-    stamp = ((data.get("osm3s") or {}).get("timestamp_osm_base") or "").strip()
-    if len(stamp) >= 16:
-        return f"{stamp[:10]} {stamp[11:16]}Z"
-    return date.today().isoformat()
+    """How current the OSM half of the diff is: the reply's own
+    osm3s.timestamp_osm_base, trimmed to the minute for display."""
+    return overpass.osm_base(data, undated=None)
 
 
 def _osm_base_time(data):
     """The same timestamp as an aware datetime, or None if absent or garbled."""
-    stamp = ((data.get("osm3s") or {}).get("timestamp_osm_base") or "").strip()
-    try:
-        return datetime.fromisoformat(stamp.replace("Z", "+00:00"))
-    except ValueError:
-        return None
+    return overpass.osm_base_time(data)
 
 
 def _cache_date():
     """How current the cached reply is: the sidecar, else the file's mtime."""
-    if os.path.isfile(config.OSM_FETCH_PATH):
-        with open(config.OSM_FETCH_PATH, encoding="utf-8") as f:
-            sidecar = json.load(f)
-        for key in ("osm_base", "fetched"):
-            if sidecar.get(key):
-                return sidecar[key]
-    stamp = os.path.getmtime(config.OSM_CACHE_PATH)
-    return date.fromtimestamp(stamp).isoformat()
+    return overpass.cache_date(config.OSM_CACHE_PATH, config.OSM_FETCH_PATH)
 
 
 def _save_fetch(fetched, url, osm_base, data):
-    with open(config.OSM_FETCH_PATH, "w", encoding="utf-8") as f:
-        json.dump({
-            "fetched": fetched,
-            "mirror": urlsplit(url).netloc,
-            "osm_base": osm_base,
-            "timestamp_osm_base":
-                (data.get("osm3s") or {}).get("timestamp_osm_base"),
-        }, f, indent=2)
+    overpass.save_fetch(config.OSM_FETCH_PATH, fetched, url, osm_base, data)
 
 
 def _osm_gardens(data):
