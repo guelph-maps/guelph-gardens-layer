@@ -35,6 +35,8 @@ import re
 import time
 
 import requests
+from layerkit.geom import point_in_ring as _point_in_ring
+from layerkit.geom import relation_outer_loops as _relation_outer_loops
 from layerkit import overpass
 # Raised by overpass.load_osm; callers and tests name it as compare's.
 from layerkit.overpass import OsmUnavailable  # noqa: F401
@@ -196,43 +198,6 @@ def _ring(geom):
     if len(pts) < 4 or pts[0] != pts[-1]:
         return None
     return pts
-
-
-def _relation_outer_loops(rel):
-    """Stitch a multipolygon relation's outer member ways into closed loops."""
-    segs = [m["geometry"] for m in rel.get("members", [])
-            if m.get("type") == "way" and m.get("role") in ("outer", "")
-            and m.get("geometry")]
-    loops = []
-    used = [False] * len(segs)
-    for i in range(len(segs)):
-        if used[i]:
-            continue
-        used[i] = True
-        loop = list(segs[i])
-        grew = True
-        while grew and _pt(loop[0]) != _pt(loop[-1]):
-            grew = False
-            for j, other in enumerate(segs):
-                if used[j]:
-                    continue
-                if _pt(other[0]) == _pt(loop[-1]):
-                    loop.extend(other[1:])
-                elif _pt(other[-1]) == _pt(loop[-1]):
-                    loop.extend(reversed(other[:-1]))
-                elif _pt(other[-1]) == _pt(loop[0]):
-                    loop[:0] = other[:-1]
-                elif _pt(other[0]) == _pt(loop[0]):
-                    loop[:0] = list(reversed(other[1:]))
-                else:
-                    continue
-                used[j] = grew = True
-        loops.append(loop)
-    return loops
-
-
-def _pt(p):
-    return (p["lat"], p["lon"])
 
 
 # --- City source ------------------------------------------------------------
@@ -452,23 +417,6 @@ def _segments_cross(p, q, r, s):
     d3, d4 = _cross(p, q, r), _cross(p, q, s)
     return ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0)) \
         and d1 != 0 and d2 != 0 and d3 != 0 and d4 != 0
-
-
-def _point_in_ring(pt, pts):
-    """Ray-casting point-in-polygon test."""
-    x, y = pt
-    n = len(pts)
-    inside = False
-    j = n - 1
-    for i in range(n):
-        xi, yi = pts[i]
-        xj, yj = pts[j]
-        if (yi > y) != (yj > y):
-            xint = (xj - xi) * (y - yi) / (yj - yi) + xi
-            if x < xint:
-                inside = not inside
-        j = i
-    return inside
 
 
 def _round_geom(geom):
